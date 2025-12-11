@@ -3,21 +3,17 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+import os
 
 # --- Configuration ---
-# The exact name of your Google Sheet file
 SHEET_NAME = 'Clinic_Daily_Ops_DB'
-
-# SCOPE defines permissions required by Google APIs
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets',
          'https://www.googleapis.com/auth/drive']
 
 # --- Helper Functions ---
 
-# 1. Connect to Google Sheets securely using Streamlit Secrets
 def get_google_sheet_client():
     try:
-        # This grabs the credentials from Streamlit's secure cloud storage
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, SCOPE)
     except FileNotFoundError:
@@ -30,39 +26,30 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# 2. Check credentials against the 'Users' tab found in the sheet
 def check_login(username, password):
     try:
         client = get_google_sheet_client()
-        # Open the spreadsheet by its exact name
         sheet = client.open(SHEET_NAME)
-        # Select the specific worksheet for users
         users_tab = sheet.worksheet("Users")
-        # Get all records as a list of dictionaries
         users_data = users_tab.get_all_records()
         df_users = pd.DataFrame(users_data)
 
-        # Find match for username and password
         user_match = df_users[(df_users['Username'].astype(str).str.strip() == username.strip()) & 
                               (df_users['Password'].astype(str).str.strip() == password.strip())]
         
         if not user_match.empty:
-            # Return success and the center name
             return True, user_match.iloc[0]['Center_Name']
         else:
             return False, None
-    except gspread.exceptions.SpreadsheetNotFound:
-        st.error(f"ERROR: The Google Sheet named '{SHEET_NAME}' was not found.")
-        return False, None
     except Exception as e:
-        st.error(f"Connection Error. Ensure sheet is shared with the service account email. Details: {e}")
+        st.error(f"Login Error: {e}")
         return False, None
 
 # --- Main Application Interface ---
 def main():
-    st.set_page_config(page_title="Clinic Daily Ops Link", page_icon="🏥", layout="wide")
+    # Updated Browser Tab Title
+    st.set_page_config(page_title="RheumaCare Ops", page_icon="🏥", layout="wide")
 
-    # Hide footer
     hide_streamlit_style = """
             <style>
             #MainMenu {visibility: hidden;}
@@ -80,7 +67,19 @@ def main():
     # LOGIN SCREEN
     # ---------------------------
     if not st.session_state['logged_in']:
-        st.title("🏥 Clinic Manager Portal")
+        
+        # --- LOGO SECTION ---
+        # Using columns to center the logo
+        left_co, cent_co, last_co = st.columns([1, 2, 1])
+        with cent_co:
+            # This requires 'logo.png' to be uploaded to your GitHub repo
+            if os.path.exists("logo.png"):
+                st.image("logo.png", width=250)
+            else:
+                st.warning("⚠️ Logo file 'logo.png' not found in repository.")
+
+        # --- UPDATED TITLE ---
+        st.title("RheumaCare Clinic Operations Portal")
         st.markdown("### Please log in to start your daily report.")
         st.markdown("---")
         
@@ -108,7 +107,8 @@ def main():
     # DAILY LOG ENTRY SCREEN
     # ---------------------------
     else:
-        st.title(f"📋 Daily Log: {st.session_state['center']}")
+        # Header showing the new company name
+        st.title(f"RheumaCare Daily Log: {st.session_state['center']}")
         st.markdown(f"**Manager:** {st.session_state['username']} | **Date:** {datetime.now().strftime('%d-%m-%Y')}")
         st.markdown("---")
 

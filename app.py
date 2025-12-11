@@ -23,21 +23,15 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# Function to fetch all data
 def load_data():
     client = get_google_sheet_client()
     sheet = client.open(SHEET_NAME)
-    
     # Load Logs
     logs_tab = sheet.worksheet("Daily_Logs")
-    logs_data = logs_tab.get_all_records()
-    df_logs = pd.DataFrame(logs_data)
-    
+    df_logs = pd.DataFrame(logs_tab.get_all_records())
     # Load Users (for adherence checks)
     users_tab = sheet.worksheet("Users")
-    users_data = users_tab.get_all_records()
-    df_users = pd.DataFrame(users_data)
-    
+    df_users = pd.DataFrame(users_tab.get_all_records())
     return df_logs, df_users
 
 def check_login(username, password):
@@ -45,140 +39,115 @@ def check_login(username, password):
         client = get_google_sheet_client()
         sheet = client.open(SHEET_NAME)
         users_tab = sheet.worksheet("Users")
-        users_data = users_tab.get_all_records()
-        df_users = pd.DataFrame(users_data)
+        df_users = pd.DataFrame(users_tab.get_all_records())
 
-        # Basic auth check
+        # Check Username & Password
         user_match = df_users[(df_users['Username'].astype(str).str.strip() == username.strip()) & 
                               (df_users['Password'].astype(str).str.strip() == password.strip())]
         
         if not user_match.empty:
-            return True, user_match.iloc[0]['Center_Name']
+            # RETURN 3 VALUES: Success, Center Name, AND ROLE
+            return True, user_match.iloc[0]['Center_Name'], user_match.iloc[0]['Role']
         else:
-            return False, None
+            return False, None, None
     except Exception as e:
         st.error(f"Login Error: {e}")
-        return False, None
+        return False, None, None
 
-# --- VIEW 1: THE GLOBAL DASHBOARD (Analysis) ---
-def show_dashboard(df_logs, df_users):
-    st.title("📊 Global Operations Dashboard")
-    st.info("This view shows performance data across ALL centers.")
+# --- VIEW: SUPERVISOR COMMAND CENTRE ---
+def show_command_centre(df_logs, df_users):
+    st.title("🚀 Operations Command Centre")
+    st.markdown("### Supervisory Analysis View")
+    st.markdown("---")
 
-    # Data Pre-processing
+    # Data Clean Up
     if not df_logs.empty:
         df_logs['Date'] = pd.to_datetime(df_logs['Timestamp']).dt.date
     
-    # Filters
-    col1, col2 = st.columns(2)
-    with col1:
-        days_to_look_back = st.selectbox("Select Time Range", [7, 14, 30, 90], index=0)
+    # 1. TOP METRICS ROW
+    col1, col2, col3, col4 = st.columns(4)
     
-    end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=days_to_look_back)
+    # Time Filter
+    days = st.sidebar.selectbox("📅 Time Range", [7, 30, 90, 365], index=0)
+    start_date = datetime.now().date() - timedelta(days=days)
     
     if not df_logs.empty:
-        mask = (df_logs['Date'] >= start_date) & (df_logs['Date'] <= end_date)
-        df_filtered = df_logs.loc[mask]
+        mask = df_logs['Date'] >= start_date
+        df_view = df_logs.loc[mask]
     else:
-        df_filtered = pd.DataFrame()
+        df_view = pd.DataFrame()
 
-    # Metrics
-    m1, m2, m3, m4 = st.columns(4)
-    total_patients = df_filtered['P3_Patient_Count'].sum() if not df_filtered.empty else 0
-    m1.metric("Total Patients", total_patients)
-    
-    total_reviews = df_filtered['P4_Google_Reviews'].sum() if not df_filtered.empty else 0
-    m2.metric("Google Reviews", total_reviews)
-    
-    # Adherence Logic
-    all_centers = df_users['Center_Name'].unique()
-    expected_dates = [end_date - timedelta(days=x) for x in range(days_to_look_back + 1)]
-    
-    total_expected_logs = len(all_centers) * len(expected_dates)
-    total_actual_logs = len(df_filtered)
-    adherence_rate = round((total_actual_logs / total_expected_logs) * 100, 1) if total_expected_logs > 0 else 0
-    
-    m3.metric("Adherence Rate", f"{adherence_rate}%")
-    
-    missed_count = max(0, total_expected_logs - total_actual_logs)
-    m4.metric("Missed Logs", missed_count, delta_color="inverse")
-    
+    # Calculate Adherence
+    active_centers = df_users[df_users['Role'] == 'Manager']['Center_Name'].unique()
+    days_range = [datetime.now().date() - timedelta(days=x) for x in range(days)]
+    total_expected = len(active_centers) * len(days_range)
+    total_actual = len(df_view)
+    adherence = int((total_actual/total_expected)*100) if total_expected > 0 else 0
+
+    col1.metric("🏥 Active Centers", len(active_centers))
+    col2.metric("👥 Total Patients", df_view['P3_Patient_Count'].sum() if not df_view.empty else 0)
+    col3.metric("⭐ Total Reviews", df_view['P4_Google_Reviews'].sum() if not df_view.empty else 0)
+    col4.metric("✅ Adherence Rate", f"{adherence}%", delta_color="normal")
+
     st.markdown("---")
 
-    # Charts
-    c1, c2 = st.columns(2)
-    with c1:
-        if not df_filtered.empty:
-            fig_patients = px.bar(df_filtered, x='Center_Name', y='P3_Patient_Count', title="Total Patients", color='Center_Name')
-            st.plotly_chart(fig_patients, use_container_width=True)
-    with c2:
-        if not df_filtered.empty:
-            fig_reviews = px.pie(df_filtered, values='P4_Google_Reviews', names='Center_Name', title="Reviews Share")
-            st.plotly_chart(fig_reviews, use_container_width=True)
-
-    # Missed Logs Table
-    st.subheader("⚠️ Missed Logs Report")
-    missed_logs_data = []
-    for check_date in expected_dates:
-        for center in all_centers:
-            if not df_filtered.empty:
-                exists = df_filtered[(df_filtered['Date'] == check_date) & (df_filtered['Center_Name'] == center)]
-                if exists.empty:
-                    missed_logs_data.append({'Date': check_date, 'Center Name': center, 'Status': 'MISSING ❌'})
-            else:
-                missed_logs_data.append({'Date': check_date, 'Center Name': center, 'Status': 'MISSING ❌'})
-
-    if missed_logs_data:
-        df_missed = pd.DataFrame(missed_logs_data)
+    # 2. MISSED LOGS TRACKER (The "Adherence" View)
+    st.subheader("⚠️ Non-Compliance Tracker (Missed Logs)")
+    
+    missed_data = []
+    for d in days_range:
+        for c in active_centers:
+            # Check if entry exists
+            if df_view.empty or df_view[(df_view['Date'] == d) & (df_view['Center_Name'] == c)].empty:
+                missed_data.append({'Date': d.strftime('%d-%b'), 'Center': c, 'Status': 'MISSING ❌'})
+    
+    if missed_data:
+        df_missed = pd.DataFrame(missed_data)
         st.dataframe(df_missed, use_container_width=True)
     else:
-        st.success("100% Adherence!")
+        st.success("✨ 100% Adherence! No missed logs in this period.")
 
-# --- VIEW 2: INDIVIDUAL LOGS (New Feature) ---
-def show_my_logs(df_logs):
-    st.title(f"📜 History: {st.session_state['center']}")
-    st.markdown("Below is a list of all submissions made for this center.")
+    st.markdown("---")
 
-    if df_logs.empty:
-        st.warning("No logs found yet.")
-        return
+    # 3. ANALYSIS CHARTS
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Patient Volume Trends")
+        if not df_view.empty:
+            fig = px.bar(df_view, x='Center_Name', y='P3_Patient_Count', color='Center_Name')
+            st.plotly_chart(fig, use_container_width=True)
+    
+    with c2:
+        st.subheader("Reviews Performance")
+        if not df_view.empty:
+            fig2 = px.pie(df_view, values='P4_Google_Reviews', names='Center_Name', hole=0.4)
+            st.plotly_chart(fig2, use_container_width=True)
 
-    # Filter strictly for the logged-in center
-    my_data = df_logs[df_logs['Center_Name'] == st.session_state['center']]
+    # 4. RAW DATA INSPECTION
+    with st.expander("🔎 View Raw Data Logs"):
+        st.dataframe(df_view, use_container_width=True)
 
-    if my_data.empty:
-        st.info("No logs found for your center.")
-    else:
-        # Sort by Timestamp descending (newest first)
-        my_data = my_data.sort_values(by='Timestamp', ascending=False)
-        st.dataframe(my_data, use_container_width=True)
 
 # --- MAIN APP LOGIC ---
 def main():
     st.set_page_config(page_title="RheumaCare Ops", page_icon="🏥", layout="wide")
     
-    hide_streamlit_style = """
-            <style>
-            #MainMenu {visibility: hidden;}
-            footer {visibility: hidden;}
-            </style>
-            """
-    st.markdown(hide_streamlit_style, unsafe_allow_html=True)
-
+    # Initialize Session
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
-        st.session_state['username'] = ''
+        st.session_state['role'] = ''
         st.session_state['center'] = ''
 
+    # ---------------------------
     # LOGIN SCREEN
+    # ---------------------------
     if not st.session_state['logged_in']:
         left_co, cent_co, last_co = st.columns([1, 2, 1])
         with cent_co:
             if os.path.exists("logo.png"):
                 st.image("logo.png", width=250)
             else:
-                st.write("RheumaCare Ops")
+                st.write("RheumaCare Ops") 
 
         st.title("RheumaCare Operations Portal")
         st.markdown("---")
@@ -187,78 +156,72 @@ def main():
         with col2:
             username = st.text_input("Username")
             password = st.text_input("Password", type="password")
+            
             if st.button("Log In", type="primary", use_container_width=True):
-                is_valid, center = check_login(username, password)
+                is_valid, center, role = check_login(username, password)
                 if is_valid:
                     st.session_state['logged_in'] = True
                     st.session_state['username'] = username
                     st.session_state['center'] = center
+                    st.session_state['role'] = role # SAVE THE ROLE
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
 
-    # LOGGED IN VIEW
+    # ---------------------------
+    # LOGGED IN VIEW (Role Based)
+    # ---------------------------
     else:
-        # Load data once for efficiency
-        df_logs, df_users = load_data()
-
         st.sidebar.title(f"👤 {st.session_state['username']}")
-        st.sidebar.write(f"📍 {st.session_state['center']}")
-        st.sidebar.markdown("---")
-        
-        # NEW NAVIGATION OPTION ADDED
-        menu_choice = st.sidebar.radio("Navigate", ["📝 Daily Entry Form", "📜 View My Center Logs", "📊 Global Dashboard"])
+        st.sidebar.caption(f"Role: {st.session_state['role']}")
         
         if st.sidebar.button("Log Out"):
             st.session_state['logged_in'] = False
             st.rerun()
-
-        # --- OPTION 1: DAILY ENTRY FORM ---
-        if menu_choice == "📝 Daily Entry Form":
+        
+        # --- LOGIC SPLIT: SUPERVISOR VS MANAGER ---
+        
+        # SCENARIO A: YOU ARE THE BOSS (Supervisor)
+        if st.session_state['role'] == "Supervisor":
+            df_logs, df_users = load_data()
+            show_command_centre(df_logs, df_users)
+            
+        # SCENARIO B: THEY ARE MANAGERS
+        else:
             st.title(f"Daily Log: {st.session_state['center']}")
-            st.markdown(f"**Date:** {datetime.now().strftime('%d-%m-%Y')}")
-            st.markdown("---")
+            
+            # Simple Navigation for Managers
+            view_mode = st.radio("Select Action:", ["📝 Submit Daily Log", "📜 View My History"], horizontal=True)
+            
+            if view_mode == "📝 Submit Daily Log":
+                with st.form("daily_form", clear_on_submit=True):
+                    st.write(f"Date: {datetime.now().strftime('%d-%m-%Y')}")
+                    p1 = st.radio("1. DB Backup Done?", ["Yes", "No"], horizontal=True)
+                    p2 = st.radio("2. Server Protocol Followed?", ["Yes", "No"], horizontal=True)
+                    p3 = st.slider("3. Patient Count", 0, 200, 50)
+                    p4 = st.selectbox("4. Google Reviews", list(range(26)))
+                    p5 = st.text_area("5. Daily Notes")
+                    
+                    if st.form_submit_button("✅ Submit Report", use_container_width=True):
+                        try:
+                            client = get_google_sheet_client()
+                            sheet = client.open(SHEET_NAME).worksheet("Daily_Logs")
+                            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            sheet.append_row([ts, st.session_state['username'], st.session_state['center'], p1, p2, p3, p4, p5])
+                            st.success("Submitted!")
+                        except Exception as e:
+                            st.error(f"Error: {e}")
 
-            with st.form("daily_entry_form", clear_on_submit=True):
-                st.markdown("### 1️⃣ Daily Offline DB Backup Completed?")
-                p1 = st.radio("Status:", ["Yes", "No"], horizontal=True, label_visibility="collapsed", key="p1")
-                st.markdown("---")
-
-                st.markdown("### 2️⃣ Weekly/Holiday Server Shutdown Protocol Followed?")
-                p2 = st.radio("Status:", ["Yes", "No"], horizontal=True, label_visibility="collapsed", key="p2")
-                st.markdown("---")
-
-                st.markdown("### 3️⃣ Total Patients Encountered")
-                p3 = st.slider("Count:", 0, 200, 50, label_visibility="collapsed", key="p3")
-                st.markdown("---")
-                
-                st.markdown("### 4️⃣ Google Reviews Collected")
-                p4 = st.selectbox("Count:", list(range(26)), label_visibility="collapsed", key="p4")
-                st.markdown("---")
-
-                st.markdown("### 5️⃣ Daily Operational Notes")
-                p5 = st.text_area("Notes:", max_chars=250, label_visibility="collapsed", key="p5")
-                st.markdown("---")
-
-                if st.form_submit_button("✅ SUBMIT REPORT", type="primary", use_container_width=True):
-                    try:
-                        client = get_google_sheet_client()
-                        sheet = client.open(SHEET_NAME).worksheet("Daily_Logs")
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        sheet.append_row([ts, st.session_state['username'], st.session_state['center'], p1, p2, p3, p4, p5])
-                        st.success("Saved successfully!")
-                        # Clear cache so new data shows up instantly in other views
-                        st.cache_data.clear()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-        # --- OPTION 2: MY LOGS (NEW) ---
-        elif menu_choice == "📜 View My Center Logs":
-            show_my_logs(df_logs)
-
-        # --- OPTION 3: GLOBAL DASHBOARD ---
-        elif menu_choice == "📊 Global Dashboard":
-            show_dashboard(df_logs, df_users)
+            elif view_mode == "📜 View My History":
+                client = get_google_sheet_client()
+                sheet = client.open(SHEET_NAME).worksheet("Daily_Logs")
+                df = pd.DataFrame(sheet.get_all_records())
+                # Filter for ONLY their center
+                if not df.empty:
+                    my_logs = df[df['Center_Name'] == st.session_state['center']]
+                    st.dataframe(my_logs, use_container_width=True)
+                else:
+                    st.info("No logs found.")
 
 if __name__ == '__main__':
     main()

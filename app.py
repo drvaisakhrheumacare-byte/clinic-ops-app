@@ -9,7 +9,6 @@ import time
 
 # --- Configuration ---
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1vqZT4ul1kJXilVdK0Avw0U2frZPGvnlHZEWOFzqCnag/edit"
-# UPDATED LOGO URL
 LOGO_URL = "https://raw.githubusercontent.com/drvaisakhrheumacare-byte/clinic-ops-app/main/logo.png"
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
@@ -77,9 +76,8 @@ def get_service_numbers():
         "Server Service": "+919800000011", "EMR Elixir Service": "+919800000012",
     }
 
-# --- VIEW: GAMIFIED DAILY REPORTING (Updated) ---
+# --- VIEW: GAMIFIED DAILY REPORTING ---
 def show_daily_reporting():
-    # UPDATED TITLE HERE
     st.header(f"📝 Rheuma CARE Daily: {st.session_state['center']}")
     
     with st.form("daily_log_new"):
@@ -117,7 +115,7 @@ def show_daily_reporting():
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- VIEW: GAMIFIED INCIDENT REPORTING (Quiz Style) ---
+# --- VIEW: GAMIFIED INCIDENT REPORTING ---
 def show_incident_reporting():
     st.header(f"⚠️ Incident Reporting")
     
@@ -191,7 +189,7 @@ def show_incident_reporting():
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- VIEW: CONTACT US (Updated with Dr Vaisakh Info) ---
+# --- VIEW: CONTACT US ---
 def show_contact_us():
     st.header("📞 Contact Us")
     
@@ -381,7 +379,6 @@ def show_supervisor_dashboard(data):
 
 # --- MAIN APP ---
 def main():
-    # UPDATED PAGE TITLE
     st.set_page_config(page_title="Rheuma CARE Daily", page_icon="🏥", layout="wide")
     
     if 'logged_in' not in st.session_state:
@@ -395,7 +392,8 @@ def main():
         with cent_co:
             st.image(LOGO_URL, width=200)
         
-        st.markdown("<h3 style='text-align: center'>Rheuma CARE Login</h3>", unsafe_allow_html=True)
+        # REMOVED THE TEXT TITLE HERE
+        
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             username = st.text_input("Username")
@@ -423,10 +421,10 @@ def main():
                 menu = "Supervisor Dashboard" # Only one view for now
             else:
                 menu = st.radio("Menu", [
-                    "Rheuma CARE Daily",  # UPDATED NAME
+                    "Rheuma CARE Daily",
                     "Incident Reporting", 
                     "Holiday List", 
-                    "Contact Us",         # UPDATED NAME
+                    "Contact Us",
                     "Reminders"
                 ])
             
@@ -444,7 +442,7 @@ def main():
             if menu == "Rheuma CARE Daily": show_daily_reporting()
             elif menu == "Incident Reporting": show_incident_reporting()
             elif menu == "Holiday List": show_holiday_manager()
-            elif menu == "Contact Us": show_contact_us() # Updated function call
+            elif menu == "Contact Us": show_contact_us()
             elif menu == "Reminders": show_reminders()
 
 if __name__ == '__main__':

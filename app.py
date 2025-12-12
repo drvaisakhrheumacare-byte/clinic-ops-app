@@ -37,7 +37,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-def get_or_create_worksheet(sheet, name, rows=100, cols=10):
+def get_or_create_worksheet(sheet, name, rows=100, cols=15):
     try:
         return sheet.worksheet(name)
     except:
@@ -96,29 +96,28 @@ def check_login(username, password):
         return False, None, None
 
 def get_center_service_numbers(center_name):
+    # FALLBACK to fetching from sheet, if missing use "Not Set"
     data = load_data()
     df_contacts = data.get('Service_Contacts')
     
-    default_contacts = {
-        "AC Service": "+919800000001", "Interior Service": "+919800000002",
-        "Electrical Service": "+919800000003", "Plumbing Service": "+919800000004",
-        "CCTV Service": "+919800000005", "Network Service": "+919800000006",
-        "Desktop Service": "+919800000007", "PBX Service": "+919800000008",
-        "Telephone Service": "+919800000009", "Bitvoice Service": "+919800000010",
-        "Server Service": "+919800000011", "EMR Elixir Service": "+919800000012",
-    }
+    required_services = [
+        "AC Service", "Interior Service", "Electrical Service", "Plumbing Service",
+        "CCTV Service", "Network Service", "Desktop Service", "PBX Service",
+        "Telephone Service", "Bitvoice Service", "Server Service", "EMR Elixir Service"
+    ]
+    
+    final_contacts = {service: "Not Set" for service in required_services}
     
     if df_contacts is not None and not df_contacts.empty:
         if 'Center' in df_contacts.columns and 'Service_Name' in df_contacts.columns:
             center_specific = df_contacts[df_contacts['Center'] == center_name]
-            if not center_specific.empty:
-                for index, row in center_specific.iterrows():
-                    service_name = row['Service_Name']
-                    number = row['Phone_Number']
-                    if service_name and number:
-                        default_contacts[service_name] = str(number)
+            for index, row in center_specific.iterrows():
+                s_name = row['Service_Name']
+                s_num = str(row['Phone_Number'])
+                if s_name in final_contacts and s_num:
+                    final_contacts[s_name] = s_num
                     
-    return default_contacts
+    return final_contacts
 
 def is_holiday_tomorrow(center_name):
     data = load_data()
@@ -160,6 +159,8 @@ def show_daily_reporting():
         open_options = generate_time_options(7, 20)
         close_options = generate_time_options(11, 22)
         
+        # Note: We collect these for UI flow, but we won't save them to sheet 
+        # as your sheet columns don't seem to include Open/Close time.
         open_time = c1.selectbox("Centre Open Time", open_options, index=0)
         close_time = c2.selectbox("Centre Close Time", close_options, index=len(close_options)-1)
         
@@ -173,18 +174,19 @@ def show_daily_reporting():
         
         server_shutdown = False
         if is_holiday:
-            # FIX: Calculated outside f-string for safety
             tmrw_date = date.today() + timedelta(days=1)
             st.warning(f"⚠️ Tomorrow ({tmrw_date}) is a detected Holiday. Please shut down servers.")
             server_shutdown = st.checkbox("✅ Server Shutdown Completed?")
         
         if st.button("Next ➡️"):
+            # We store 'server_shutdown' as YES/NO if asked, or "N/A" if not asked
+            server_val = "YES" if server_shutdown else "NO"
+            if not is_holiday:
+                server_val = "N/A"
+
             st.session_state['daily_data'].update({
-                'open': str(open_time),
-                'close': str(close_time),
                 'offline_backup': "YES" if offline_backup else "NO",
-                'server_shutdown': "YES" if server_shutdown else "NO" if is_holiday else "N/A",
-                'holiday_tmrw': "YES" if is_holiday else "NO"
+                'server_shutdown': server_val
             })
             st.session_state['daily_step'] = 2
             st.rerun()
@@ -234,11 +236,23 @@ def show_daily_reporting():
                 ws = get_or_create_worksheet(sheet, "Daily_Logs")
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 d = st.session_state['daily_data']
+                
+                # --- FIXED ROW MAPPING ---
+                # Strictly aligned to your sheet headers:
+                # Timestamp | Username | Center | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P9
                 row_data = [
-                    ts, st.session_state['username'], st.session_state['center'],
-                    d['open'], d['close'], d['offline_backup'], d['server_shutdown'], d['holiday_tmrw'],
-                    d['total_patients'], d['new_patients'], d['walk_in'], d['rebooking'], d['reviews'],
-                    d['cash'], notes
+                    ts,                                         # Timestamp
+                    st.session_state['username'],               # Submitter_Username
+                    st.session_state['center'],                 # Center_Name
+                    d.get('offline_backup', 'NO'),              # P1_DB_Backup
+                    d.get('server_shutdown', 'N/A'),            # P2_Server_Protocol
+                    d.get('total_patients', 0),                 # P3_Total_Encounters
+                    d.get('reviews', 0),                        # P4_Google_Reviews
+                    notes,                                      # P5_Daily_Notes
+                    d.get('cash', 0.0),                         # P6_Cash_Deposit
+                    d.get('rebooking', 0),                      # P7_Rebooking_Count
+                    d.get('new_patients', 0),                   # P8_New_Patients
+                    d.get('walk_in', 0)                         # P9_Walkin_Patients
                 ]
                 ws.append_row(row_data)
 
@@ -340,19 +354,23 @@ def show_contact_us():
         with cols[idx % 3]:
             with st.container(border=True):
                 st.write(f"**{name}**")
-                if st.button(f"📞 Call", key=f"btn_{name}"):
-                    def _log_call():
-                        client = get_google_sheet_client()
-                        sheet = client.open_by_url(SHEET_URL)
-                        ws = get_or_create_worksheet(sheet, "Service_Logs")
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        ws.append_row([ts, st.session_state['center'], name, number])
-                    try:
-                        retry_api_call(_log_call)
-                        st.success(f"Logged! Dial: {number}")
-                        st.markdown(f'<a href="tel:{number}">Click to Call</a>', unsafe_allow_html=True)
-                    except Exception as e:
-                        st.error(f"Logging failed: {e}")
+                # Show "Not Set" in grey if no number exists
+                if number == "Not Set":
+                     st.markdown(f"*{number}*")
+                else:
+                    if st.button(f"📞 Call", key=f"btn_{name}"):
+                        def _log_call():
+                            client = get_google_sheet_client()
+                            sheet = client.open_by_url(SHEET_URL)
+                            ws = get_or_create_worksheet(sheet, "Service_Logs")
+                            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            ws.append_row([ts, st.session_state['center'], name, number])
+                        try:
+                            retry_api_call(_log_call)
+                            st.success(f"Logged! Dial: {number}")
+                            st.markdown(f'<a href="tel:{number}">Click to Call</a>', unsafe_allow_html=True)
+                        except Exception as e:
+                            st.error(f"Logging failed: {e}")
 
 def show_reminders():
     st.header("🔔 Bill & Payment Reminders")

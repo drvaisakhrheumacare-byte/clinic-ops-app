@@ -53,7 +53,6 @@ def generate_time_options(start_hour, end_hour):
     return times
 
 # --- DATA LOADER (OPTIMIZED) ---
-# Increased cache to 5 minutes to prevent 429 Errors
 @st.cache_data(ttl=300)
 def load_data():
     client = get_google_sheet_client()
@@ -66,7 +65,8 @@ def load_data():
         for tab in tabs:
             try:
                 ws = sheet.worksheet(tab)
-                data[tab] = pd.DataFrame(ws.get_all_records())
+                df = pd.DataFrame(ws.get_all_records())
+                data[tab] = df
             except:
                 data[tab] = pd.DataFrame()
         return data
@@ -76,24 +76,26 @@ def load_data():
 # --- AUTH & LOGIC ---
 
 def check_login(username, password):
-    # CHANGED: Uses cached data instead of hitting API again
     data = load_data()
     df_users = data.get('Users')
     
-    if df_users.empty:
+    if df_users is None or df_users.empty:
         return False, None, None
 
     # Check Username & Password
-    user_match = df_users[(df_users['Username'].astype(str).str.strip() == username.strip()) & 
-                          (df_users['Password'].astype(str).str.strip() == password.strip())]
-    
-    if not user_match.empty:
-        return True, user_match.iloc[0]['Center_Name'], user_match.iloc[0]['Role']
-    else:
+    try:
+        user_match = df_users[(df_users['Username'].astype(str).str.strip() == username.strip()) & 
+                              (df_users['Password'].astype(str).str.strip() == password.strip())]
+        
+        if not user_match.empty:
+            return True, user_match.iloc[0]['Center_Name'], user_match.iloc[0]['Role']
+        else:
+            return False, None, None
+    except KeyError:
+        st.error("Sheet Error: 'Users' tab missing headers (Username, Password, Role, Center_Name).")
         return False, None, None
 
 def get_center_service_numbers(center_name):
-    # CHANGED: Uses cached data
     data = load_data()
     df_contacts = data.get('Service_Contacts')
     
@@ -106,14 +108,15 @@ def get_center_service_numbers(center_name):
         "Server Service": "+919800000011", "EMR Elixir Service": "+919800000012",
     }
     
-    if not df_contacts.empty:
-        center_specific = df_contacts[df_contacts['Center'] == center_name]
-        if not center_specific.empty:
-            for index, row in center_specific.iterrows():
-                service_name = row['Service_Name']
-                number = row['Phone_Number']
-                if service_name and number:
-                    default_contacts[service_name] = str(number)
+    if df_contacts is not None and not df_contacts.empty:
+        if 'Center' in df_contacts.columns and 'Service_Name' in df_contacts.columns:
+            center_specific = df_contacts[df_contacts['Center'] == center_name]
+            if not center_specific.empty:
+                for index, row in center_specific.iterrows():
+                    service_name = row['Service_Name']
+                    number = row['Phone_Number']
+                    if service_name and number:
+                        default_contacts[service_name] = str(number)
                     
     return default_contacts
 
@@ -121,17 +124,27 @@ def is_holiday_tomorrow(center_name):
     data = load_data()
     df_h = data.get('Holidays')
     
-    if df_h.empty:
+    # --- CRITICAL FIX: SAFETY CHECK ---
+    # If the sheet is empty or missing columns, return False (Not a holiday)
+    if df_h is None or df_h.empty:
         return False
+        
+    if 'Date' not in df_h.columns or 'Center' not in df_h.columns:
+        # Columns missing, cannot check
+        return False
+    # ----------------------------------
         
     tomorrow = date.today() + timedelta(days=1)
     tomorrow_str = tomorrow.strftime("%Y-%m-%d")
     
-    match = df_h[
-        (df_h['Date'].astype(str) == tomorrow_str) & 
-        (df_h['Center'] == center_name)
-    ]
-    return not match.empty
+    try:
+        match = df_h[
+            (df_h['Date'].astype(str) == tomorrow_str) & 
+            (df_h['Center'] == center_name)
+        ]
+        return not match.empty
+    except:
+        return False
 
 # --- VIEW FUNCTIONS ---
 
@@ -157,7 +170,7 @@ def show_daily_reporting():
         
         offline_backup = st.checkbox("✅ Offline Backup Taken?")
         
-        # Holiday check using cache
+        # Holiday check (Safe Version)
         is_holiday = is_holiday_tomorrow(st.session_state['center'])
         
         server_shutdown = False
@@ -231,7 +244,7 @@ def show_daily_reporting():
 
             try:
                 retry_api_call(_submit)
-                st.cache_data.clear() # Clear cache to show update
+                st.cache_data.clear()
                 st.success("Daily log saved successfully! 🎉")
                 time.sleep(2)
                 st.session_state['daily_step'] = 1
@@ -343,7 +356,6 @@ def show_contact_us():
 
 def show_reminders():
     st.header("🔔 Bill & Payment Reminders")
-    # Use cached data first
     data = load_data()
     df_rem = data.get('Reminders')
     
@@ -352,13 +364,14 @@ def show_reminders():
         "SIP": None, "ISP1": None, "ISP2": None
     }
     
-    if not df_rem.empty:
-        center_rem = df_rem[df_rem['Center'] == st.session_state['center']]
-        for index, row in center_rem.iterrows():
-            if row['Type'] in defaults:
-                try:
-                    defaults[row['Type']] = datetime.strptime(str(row['Due_Date']), "%Y-%m-%d").date()
-                except: pass
+    if df_rem is not None and not df_rem.empty:
+        if 'Center' in df_rem.columns and 'Type' in df_rem.columns:
+            center_rem = df_rem[df_rem['Center'] == st.session_state['center']]
+            for index, row in center_rem.iterrows():
+                if row['Type'] in defaults:
+                    try:
+                        defaults[row['Type']] = datetime.strptime(str(row['Due_Date']), "%Y-%m-%d").date()
+                    except: pass
 
     with st.form("reminders_form"):
         col1, col2 = st.columns(2)
@@ -388,7 +401,7 @@ def show_holiday_manager():
     st.header("📅 Holiday List")
     data = load_data()
     df_h = data.get('Holidays')
-    if not df_h.empty:
+    if df_h is not None and not df_h.empty:
         st.dataframe(df_h, use_container_width=True)
     
     st.divider()
@@ -419,9 +432,9 @@ def show_supervisor_dashboard(data):
         df_logs = data.get('Daily_Logs')
         df_users = data.get('Users')
         
-        all_centers = df_users[df_users['Role'] == 'Centre Manager']['Center_Name'].unique() if not df_users.empty else []
+        all_centers = df_users[df_users['Role'] == 'Centre Manager']['Center_Name'].unique() if (df_users is not None and not df_users.empty) else []
         status_rows = []
-        if not df_logs.empty:
+        if df_logs is not None and not df_logs.empty:
             df_logs['Date_Obj'] = pd.to_datetime(df_logs['Timestamp']).dt.date
             day_logs = df_logs[df_logs['Date_Obj'] == date_sel]
         else:
@@ -440,20 +453,20 @@ def show_supervisor_dashboard(data):
 
     with tab2:
         df_inc = data.get('Incidents')
-        if not df_inc.empty:
+        if df_inc is not None and not df_inc.empty:
             df_inc = df_inc.sort_values(by=df_inc.columns[0], ascending=False).head(15)
             st.dataframe(df_inc, use_container_width=True)
     
     with tab3:
         df_svc = data.get('Service_Logs')
-        if not df_svc.empty:
+        if df_svc is not None and not df_svc.empty:
             df_svc = df_svc.sort_values(by=df_svc.columns[0], ascending=False)
             st.dataframe(df_svc, use_container_width=True)
             
     with tab4:
         st.subheader("📞 Manage Centre Contacts")
         df_users = data.get('Users')
-        available_centers = df_users['Center_Name'].unique().tolist() if not df_users.empty else []
+        available_centers = df_users['Center_Name'].unique().tolist() if (df_users is not None and not df_users.empty) else []
         
         with st.form("add_contact_form"):
             s_center = st.selectbox("Select Center", available_centers)

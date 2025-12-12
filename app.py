@@ -7,7 +7,8 @@ import plotly.express as px
 import os
 
 # --- Configuration ---
-SHEET_NAME = 'Clinic_Daily_Ops_DB'
+# We use the URL because it is more reliable than the name
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1vqZT4ul1kJXilVdK0Avw0U2frZPGvnlHZEWOFzqCnag/edit"
 SCOPE = ['https://www.googleapis.com/auth/spreadsheets',
          'https://www.googleapis.com/auth/drive']
 
@@ -23,11 +24,13 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
+# --- DATA LOADER WITH CACHING (The Fix for 429 Errors) ---
+@st.cache_data(ttl=60) # Remember data for 60 seconds to stop hitting Google's limit
 def load_data():
     client = get_google_sheet_client()
-    sheet = client.open(SHEET_NAME)
+    sheet = client.open_by_url(SHEET_URL)
     
-    # Load Logs (Handle missing tab gracefully)
+    # Load Logs
     try:
         logs_tab = sheet.worksheet("Daily_Logs")
         df_logs = pd.DataFrame(logs_tab.get_all_records())
@@ -53,7 +56,7 @@ def load_data():
 def check_login(username, password):
     try:
         client = get_google_sheet_client()
-        sheet = client.open(SHEET_NAME)
+        sheet = client.open_by_url(SHEET_URL)
         users_tab = sheet.worksheet("Users")
         df_users = pd.DataFrame(users_tab.get_all_records())
 
@@ -189,7 +192,7 @@ def show_daily_reporting():
             try:
                 with st.spinner("Submitting your report..."):
                     client = get_google_sheet_client()
-                    sheet = client.open(SHEET_NAME).worksheet("Daily_Logs")
+                    sheet = client.open_by_url(SHEET_URL).worksheet("Daily_Logs")
                     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     a = st.session_state['daily_answers']
                     # Order: Timestamp, User, Center, P1, P2, P3, P4, P5, P6, P7, P8, P9
@@ -199,12 +202,16 @@ def show_daily_reporting():
                         a.get('p6'), a.get('p7'), a.get('p8'), a.get('p9')
                     ]
                     sheet.append_row(row_data)
+                    
+                    # CLEAR CACHE SO DASHBOARD UPDATES
+                    st.cache_data.clear()
+                    
                     st.success("🎉 Report Submitted!"); st.balloons()
                     restart_form()
             except Exception as e:
                 st.error(f"Error submitting: {e}")
 
-# --- VIEW 2: DETAILED INCIDENT REPORTING ---
+# --- VIEW 2: INCIDENT REPORTING (Detailed) ---
 def show_incident_reporting():
     st.header(f"⚠️ Incident Reporting: {st.session_state['center']}")
     st.info("Fill out all relevant sections. Multiple selections allowed for categories.")
@@ -284,7 +291,6 @@ def show_incident_reporting():
             i_witness = st.text_input("Witness Details (Name & Staff ID)")
         with c6:
             st.write("Escalation Reported To:")
-            # HARDCODED ESCALATION OPTIONS
             i_escalation = st.radio("Select One:", 
                 ["Centre Supervisor", "HR Manager", "Lab Manager", "Growth Manager"])
 
@@ -297,11 +303,11 @@ def show_incident_reporting():
             else:
                 try:
                     client = get_google_sheet_client()
-                    # Connect to 'Incidents' tab (creates it if missing)
+                    # Connect to 'Incidents' tab
                     try:
-                        sheet = client.open(SHEET_NAME).worksheet("Incidents")
+                        sheet = client.open_by_url(SHEET_URL).worksheet("Incidents")
                     except:
-                        sheet = client.open(SHEET_NAME).add_worksheet(title="Incidents", rows=100, cols=21)
+                        sheet = client.open_by_url(SHEET_URL).add_worksheet(title="Incidents", rows=100, cols=21)
                     
                     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     def join_list(l): return ", ".join(l) if l else ""
@@ -315,6 +321,10 @@ def show_incident_reporting():
                         i_desc, i_witness, i_escalation
                     ]
                     sheet.append_row(row_data)
+                    
+                    # CLEAR CACHE
+                    st.cache_data.clear()
+                    
                     st.success("✅ Incident logged successfully."); st.balloons()
                 except Exception as e:
                     st.error(f"Error logging incident: {e}")
@@ -351,10 +361,12 @@ def show_settings():
             try:
                 client = get_google_sheet_client()
                 try:
-                    sheet = client.open(SHEET_NAME).worksheet("Holidays")
+                    sheet = client.open_by_url(SHEET_URL).worksheet("Holidays")
                 except:
-                    sheet = client.open(SHEET_NAME).add_worksheet(title="Holidays", rows=100, cols=3)
+                    sheet = client.open_by_url(SHEET_URL).add_worksheet(title="Holidays", rows=100, cols=3)
                 sheet.append_row([st.session_state['center'], str(h_date), h_desc])
+                
+                st.cache_data.clear()
                 st.success(f"Added holiday for {st.session_state['center']}")
             except Exception as e:
                 st.error(f"Error: {e}")

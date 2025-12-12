@@ -3,8 +3,6 @@ import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, date, timedelta
-import plotly.express as px
-import os
 import time
 
 # --- Configuration ---
@@ -29,6 +27,17 @@ def get_or_create_worksheet(sheet, name, rows=100, cols=10):
         return sheet.worksheet(name)
     except:
         return sheet.add_worksheet(title=name, rows=rows, cols=cols)
+
+# --- TIME GENERATORS ---
+def generate_time_options(start_hour, end_hour):
+    times = []
+    # Loop from start hour to end hour
+    for hour in range(start_hour, end_hour + 1):
+        for minute in [0, 30]:  # 30 min intervals
+            # Standard AM/PM formatting
+            t = datetime.strptime(f"{hour}:{minute}", "%H:%M")
+            times.append(t.strftime("%I:%M %p"))
+    return times
 
 # --- DATA LOADER ---
 @st.cache_data(ttl=60)
@@ -66,7 +75,6 @@ def check_login(username, password):
     except:
         return False, None, None
 
-# Get contacts specifically for the logged-in center
 def get_center_service_numbers(center_name):
     data = load_data()
     df_contacts = data.get('Service_Contacts')
@@ -81,7 +89,6 @@ def get_center_service_numbers(center_name):
     }
     
     if not df_contacts.empty:
-        # Filter for this center
         center_specific = df_contacts[df_contacts['Center'] == center_name]
         if not center_specific.empty:
             for index, row in center_specific.iterrows():
@@ -92,9 +99,28 @@ def get_center_service_numbers(center_name):
                     
     return default_contacts
 
-# --- VIEW: GAMIFIED DAILY REPORTING (QUIZ STYLE) ---
+def is_holiday_tomorrow(center_name):
+    data = load_data()
+    df_h = data.get('Holidays')
+    
+    if df_h.empty:
+        return False
+        
+    tomorrow = date.today() + timedelta(days=1)
+    tomorrow_str = tomorrow.strftime("%Y-%m-%d")
+    
+    # Check if tomorrow is in holidays for this center
+    # Assuming Holiday Sheet has columns: Date, Name, Center
+    # We check if Date matches AND Center matches
+    match = df_h[
+        (df_h['Date'].astype(str) == tomorrow_str) & 
+        (df_h['Center'] == center_name)
+    ]
+    
+    return not match.empty
+
+# --- VIEW: GAMIFIED DAILY REPORTING ---
 def show_daily_reporting():
-    # 1. Removed "Growth" from header
     st.header(f"📝 Daily Log: {st.session_state['center']}")
     
     if 'daily_step' not in st.session_state: st.session_state['daily_step'] = 1
@@ -105,28 +131,37 @@ def show_daily_reporting():
         st.subheader("Step 1: Operational Basics")
         
         c1, c2 = st.columns(2)
-        open_time = c1.time_input("Centre Open Time", value=None)
-        close_time = c2.time_input("Centre Close Time", value=None)
+        
+        # 1. Custom Time Ranges
+        # Open: 7 AM (7) to 8 PM (20)
+        open_options = generate_time_options(7, 20)
+        # Close: 11 AM (11) to 10 PM (22)
+        close_options = generate_time_options(11, 22)
+        
+        open_time = c1.selectbox("Centre Open Time", open_options, index=0)
+        close_time = c2.selectbox("Centre Close Time", close_options, index=len(close_options)-1) # Default to late
         
         st.markdown("---")
         st.write(" **End of Day Checks:**")
         
-        # Restored Item: Offline Backup
         offline_backup = st.checkbox("✅ Offline Backup Taken?")
         
-        # Restored Item: Server Shutdown
-        server_shutdown = st.checkbox("✅ Server Shutdown Completed?")
+        # 2. Automated Holiday Check
+        is_holiday = is_holiday_tomorrow(st.session_state['center'])
         
-        # Restored Item: Holiday Check
-        holiday_tmrw = st.checkbox("🗓️ Is Centre Closed Tomorrow?")
-
+        server_shutdown = False
+        if is_holiday:
+            st.warning(f"⚠️ Tomorrow is a detected Holiday. Please shut down servers.")
+            # Only ask if holiday detected
+            server_shutdown = st.checkbox("✅ Server Shutdown Completed?")
+        
         if st.button("Next ➡️"):
             st.session_state['daily_data'].update({
                 'open': str(open_time),
                 'close': str(close_time),
                 'offline_backup': "YES" if offline_backup else "NO",
-                'server_shutdown': "YES" if server_shutdown else "NO",
-                'holiday_tmrw': "YES" if holiday_tmrw else "NO"
+                'server_shutdown': "YES" if server_shutdown else "NO" if is_holiday else "N/A",
+                'holiday_tmrw': "YES" if is_holiday else "NO" # Auto calculated
             })
             st.session_state['daily_step'] = 2
             st.rerun()
@@ -137,7 +172,6 @@ def show_daily_reporting():
         
         c1, c2 = st.columns(2)
         
-        # Restored Items
         with c1:
             total_patients = st.number_input("Total Patient Count", min_value=0)
             new_patients = st.number_input("New Patients Count", min_value=0)
@@ -169,7 +203,6 @@ def show_daily_reporting():
     elif st.session_state['daily_step'] == 3:
         st.subheader("Step 3: Final Notes")
         
-        # Restored Item: Daily Notes
         notes = st.text_area("Daily Notes / Handover Issues")
         
         st.info("Please review your data before submitting.")
@@ -189,7 +222,6 @@ def show_daily_reporting():
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 d = st.session_state['daily_data']
                 
-                # Full Data Row
                 row_data = [
                     ts, st.session_state['username'], st.session_state['center'],
                     d['open'], d['close'], d['offline_backup'], d['server_shutdown'], d['holiday_tmrw'],
@@ -277,255 +309,11 @@ def show_incident_reporting():
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- VIEW: CONTACT US (UPDATED) ---
+# --- VIEW: CONTACT US ---
 def show_contact_us():
     st.header("📞 Contact Us")
-    
-    # 2. Changed Title to Growth Manager
     st.markdown("### Growth Manager")
     
     col_left, col_right = st.columns(2)
     with col_left:
         st.info("📧 **Email**")
-        st.markdown("**dr.vaisakh@rheumacare.com**")
-    with col_right:
-        st.success("📞 **Phone**")
-        st.markdown("**9717096659**")
-        
-    st.markdown("---")
-
-    # 3. Dynamic Facility Services
-    st.subheader("Facility & Operations Support")
-    st.caption("These contacts are specific to your centre.")
-    
-    # Fetch contacts dynamically for the logged-in center
-    services = get_center_service_numbers(st.session_state['center'])
-    
-    cols = st.columns(3)
-    
-    for idx, (name, number) in enumerate(services.items()):
-        with cols[idx % 3]:
-            with st.container(border=True):
-                st.write(f"**{name}**")
-                if st.button(f"📞 Call", key=f"btn_{name}"):
-                    try:
-                        client = get_google_sheet_client()
-                        sheet = client.open_by_url(SHEET_URL)
-                        ws = get_or_create_worksheet(sheet, "Service_Logs")
-                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        ws.append_row([ts, st.session_state['center'], name, number])
-                        st.success(f"Logged! Dial: {number}")
-                        st.markdown(f'<a href="tel:{number}">Click to Call</a>', unsafe_allow_html=True)
-                    except Exception as e:
-                        st.error(f"Logging failed: {e}")
-
-# --- VIEW: REMINDERS ---
-def show_reminders():
-    st.header("🔔 Bill & Payment Reminders")
-    client = get_google_sheet_client()
-    sheet = client.open_by_url(SHEET_URL)
-    ws = get_or_create_worksheet(sheet, "Reminders", cols=4)
-    
-    all_reminders = ws.get_all_records()
-    df_rem = pd.DataFrame(all_reminders)
-    
-    defaults = {
-        "Electricity Bill": None, "Water Bill": None, "Rent": None,
-        "SIP": None, "ISP1": None, "ISP2": None
-    }
-    
-    if not df_rem.empty:
-        center_rem = df_rem[df_rem['Center'] == st.session_state['center']]
-        for index, row in center_rem.iterrows():
-            if row['Type'] in defaults:
-                try:
-                    defaults[row['Type']] = datetime.strptime(str(row['Due_Date']), "%Y-%m-%d").date()
-                except: pass
-
-    with st.form("reminders_form"):
-        col1, col2 = st.columns(2)
-        new_values = {}
-        items = list(defaults.keys())
-        for i, item in enumerate(items):
-            target_col = col1 if i % 2 == 0 else col2
-            new_values[item] = target_col.date_input(f"{item} Due Date", value=defaults[item])
-
-        if st.form_submit_button("Update Reminders"):
-            ts = datetime.now().strftime("%Y-%m-%d")
-            for r_type, r_date in new_values.items():
-                if r_date:
-                    ws.append_row([st.session_state['center'], r_type, str(r_date), ts])
-            st.success("Reminders Updated")
-            st.cache_data.clear()
-
-# --- VIEW: HOLIDAY LIST ---
-def show_holiday_manager():
-    st.header("📅 Holiday List")
-    data = load_data()
-    df_h = data.get('Holidays')
-    
-    if not df_h.empty:
-        st.dataframe(df_h, use_container_width=True)
-    
-    st.divider()
-    with st.form("add_holiday"):
-        st.write("**Add New Holiday**")
-        d = st.date_input("Date")
-        n = st.text_input("Holiday Name")
-        if st.form_submit_button("Add"):
-            client = get_google_sheet_client()
-            sheet = client.open_by_url(SHEET_URL)
-            ws = get_or_create_worksheet(sheet, "Holidays")
-            ws.append_row([str(d), n, st.session_state['center']])
-            st.success("Holiday Added")
-            st.cache_data.clear()
-
-# --- SUPERVISOR DASHBOARD ---
-def show_supervisor_dashboard(data):
-    st.title("👨‍💼 Supervisor Dashboard")
-    
-    # 4. Added "Manage Contacts" tab
-    tab1, tab2, tab3, tab4 = st.tabs(["Daily Logs", "Incident Reports", "Service Call Logs", "Manage Contacts"])
-    
-    # Tab 1: Daily Logs
-    with tab1:
-        st.subheader("Daily Centre Status")
-        date_sel = st.date_input("Select Date", date.today())
-        
-        df_logs = data.get('Daily_Logs')
-        df_users = data.get('Users')
-        
-        all_centers = df_users[df_users['Role'] == 'Centre Manager']['Center_Name'].unique() if not df_users.empty else []
-        status_rows = []
-        
-        if not df_logs.empty:
-            df_logs['Date_Obj'] = pd.to_datetime(df_logs['Timestamp']).dt.date
-            day_logs = df_logs[df_logs['Date_Obj'] == date_sel]
-        else:
-            day_logs = pd.DataFrame()
-
-        for center in all_centers:
-            entry = day_logs[day_logs['Center_Name'] == center] if not day_logs.empty else pd.DataFrame()
-            if not entry.empty:
-                # We show basic status here
-                status_rows.append({"Centre": center, "Status": "✅ Reported"})
-            else:
-                status_rows.append({"Centre": center, "Status": "❌ Missing"})
-        
-        df_status = pd.DataFrame(status_rows)
-        if not df_status.empty:
-            st.dataframe(df_status, use_container_width=True)
-
-    # Tab 2: Incidents
-    with tab2:
-        st.subheader("⚠️ Latest Incidents")
-        df_inc = data.get('Incidents')
-        if not df_inc.empty:
-            df_inc = df_inc.sort_values(by=df_inc.columns[0], ascending=False).head(15)
-            st.dataframe(df_inc, use_container_width=True)
-        else:
-            st.info("No incidents reported.")
-
-    # Tab 3: Service Logs
-    with tab3:
-        st.subheader("🔧 Service Call History")
-        df_svc = data.get('Service_Logs')
-        if not df_svc.empty:
-            df_svc = df_svc.sort_values(by=df_svc.columns[0], ascending=False)
-            st.dataframe(df_svc, use_container_width=True)
-        else:
-            st.info("No service calls logged.")
-            
-    # Tab 4: Manage Service Contacts (New Feature)
-    with tab4:
-        st.subheader("📞 Manage Centre Contacts")
-        st.info("Add or Update service numbers for specific centers here.")
-        
-        df_users = data.get('Users')
-        available_centers = df_users['Center_Name'].unique().tolist() if not df_users.empty else []
-        
-        with st.form("add_contact_form"):
-            s_center = st.selectbox("Select Center", available_centers)
-            s_service = st.selectbox("Service Type", [
-                "AC Service", "Interior Service", "Electrical Service", 
-                "Plumbing Service", "CCTV Service", "Network Service",
-                "Desktop Service", "PBX Service", "Telephone Service", 
-                "Bitvoice Service", "Server Service", "EMR Elixir Service"
-            ])
-            s_number = st.text_input("Phone Number (+91...)")
-            
-            if st.form_submit_button("Save Contact"):
-                if s_number:
-                    client = get_google_sheet_client()
-                    sheet = client.open_by_url(SHEET_URL)
-                    ws = get_or_create_worksheet(sheet, "Service_Contacts", cols=3)
-                    # Append new mapping
-                    ws.append_row([s_center, s_service, s_number])
-                    st.success(f"Contact for {s_service} at {s_center} updated!")
-                    st.cache_data.clear()
-
-# --- MAIN APP ---
-def main():
-    st.set_page_config(page_title="Rheuma CARE Daily", page_icon="🏥", layout="wide")
-    
-    if 'logged_in' not in st.session_state:
-        st.session_state['logged_in'] = False
-        st.session_state['role'] = ''
-        st.session_state['center'] = ''
-
-    if not st.session_state['logged_in']:
-        left_co, cent_co, last_co = st.columns([1, 2, 1])
-        with cent_co:
-            st.image(LOGO_URL, width=200)
-            
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            if st.button("Log In", type="primary", use_container_width=True):
-                is_valid, center, role = check_login(username, password)
-                if is_valid:
-                    st.session_state['logged_in'] = True
-                    st.session_state['username'] = username
-                    st.session_state['center'] = center
-                    st.session_state['role'] = role
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials")
-    else:
-        with st.sidebar:
-            st.image(LOGO_URL, width=150)
-            st.title(f"{st.session_state['center']}")
-            st.caption(f"Role: {st.session_state['role']}")
-            st.divider()
-            
-            if st.session_state['role'] == "Supervisor":
-                menu = "Supervisor Dashboard"
-            else:
-                # 2. Reordered Menu
-                menu = st.radio("Menu", [
-                    "Rheuma CARE Daily",
-                    "Incident Reporting", 
-                    "Holiday List", 
-                    "Reminders",
-                    "Contact Us" # Moved to Last
-                ])
-            
-            st.divider()
-            if st.button("Log Out"):
-                st.session_state['logged_in'] = False
-                st.session_state['daily_step'] = 1 
-                st.rerun()
-
-        if st.session_state['role'] == "Supervisor":
-            data = load_data()
-            show_supervisor_dashboard(data)
-        else:
-            if menu == "Rheuma CARE Daily": show_daily_reporting()
-            elif menu == "Incident Reporting": show_incident_reporting()
-            elif menu == "Holiday List": show_holiday_manager()
-            elif menu == "Reminders": show_reminders()
-            elif menu == "Contact Us": show_contact_us()
-
-if __name__ == '__main__':
-    main()

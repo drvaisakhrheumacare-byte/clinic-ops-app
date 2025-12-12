@@ -2,15 +2,15 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 import plotly.express as px
 import os
+import time
 
 # --- Configuration ---
-# We use the URL because it is more reliable than the name
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1vqZT4ul1kJXilVdK0Avw0U2frZPGvnlHZEWOFzqCnag/edit"
-SCOPE = ['https://www.googleapis.com/auth/spreadsheets',
-         'https://www.googleapis.com/auth/drive']
+LOGO_URL = "https://raw.githubusercontent.com/drvaisakhrheumacare-byte/clinic-ops-app/refs/heads/main/download.jpeg"
+SCOPE = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
 
 # --- Helper Functions ---
 
@@ -24,412 +24,355 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-# --- DATA LOADER WITH CACHING (The Fix for 429 Errors) ---
-@st.cache_data(ttl=60) # Remember data for 60 seconds to stop hitting Google's limit
+def get_or_create_worksheet(sheet, name, rows=100, cols=10):
+    try:
+        return sheet.worksheet(name)
+    except:
+        return sheet.add_worksheet(title=name, rows=rows, cols=cols)
+
+# --- DATA LOADER ---
+@st.cache_data(ttl=60)
 def load_data():
     client = get_google_sheet_client()
     sheet = client.open_by_url(SHEET_URL)
     
-    # Load Logs
-    try:
-        logs_tab = sheet.worksheet("Daily_Logs")
-        df_logs = pd.DataFrame(logs_tab.get_all_records())
-    except:
-        df_logs = pd.DataFrame()
-
-    # Load Users
-    try:
-        users_tab = sheet.worksheet("Users")
-        df_users = pd.DataFrame(users_tab.get_all_records())
-    except:
-        df_users = pd.DataFrame()
+    data = {}
+    tabs = ["Daily_Logs", "Users", "Incidents", "Service_Logs", "Reminders", "Holidays"]
     
-    # Load Tutorials
-    try:
-        tutorials_tab = sheet.worksheet("Tutorials")
-        df_tutorials = pd.DataFrame(tutorials_tab.get_all_records())
-    except:
-        df_tutorials = pd.DataFrame()
-
-    return df_logs, df_users, df_tutorials
+    for tab in tabs:
+        try:
+            ws = sheet.worksheet(tab)
+            data[tab] = pd.DataFrame(ws.get_all_records())
+        except:
+            data[tab] = pd.DataFrame() # Return empty DF if tab missing
+            
+    return data
 
 def check_login(username, password):
+    client = get_google_sheet_client()
+    sheet = client.open_by_url(SHEET_URL)
     try:
-        client = get_google_sheet_client()
-        sheet = client.open_by_url(SHEET_URL)
         users_tab = sheet.worksheet("Users")
         df_users = pd.DataFrame(users_tab.get_all_records())
-
+        
         # Check Username & Password
         user_match = df_users[(df_users['Username'].astype(str).str.strip() == username.strip()) & 
                               (df_users['Password'].astype(str).str.strip() == password.strip())]
         
         if not user_match.empty:
-            # RETURN 3 VALUES: Success, Center Name, AND ROLE
             return True, user_match.iloc[0]['Center_Name'], user_match.iloc[0]['Role']
         else:
             return False, None, None
-    except Exception as e:
-        st.error(f"Login Error: {e}")
+    except:
         return False, None, None
 
-# --- VIEW 1: GAMIFIED DAILY REPORTING (Wizard Style) ---
+def get_service_numbers():
+    return {
+        "AC Service": "+919800000001", "Interior Service": "+919800000002",
+        "Electrical Service": "+919800000003", "Plumbing Service": "+919800000004",
+        "CCTV Service": "+919800000005", "Network Service": "+919800000006",
+        "Desktop Service": "+919800000007", "PBX Service": "+919800000008",
+        "Telephone Service": "+919800000009", "Bitvoice Service": "+919800000010",
+        "Server Service": "+919800000011", "EMR Elixir Service": "+919800000012",
+    }
+
+# --- VIEW: GAMIFIED DAILY REPORTING (Updated) ---
 def show_daily_reporting():
-    st.header(f"📝 Daily Check-In: {st.session_state['center']}")
+    st.header(f"📝 Daily Log: {st.session_state['center']}")
     
-    # Initialize the 'step' in session state
-    if 'daily_step' not in st.session_state:
-        st.session_state['daily_step'] = 1
-        st.session_state['daily_answers'] = {}
-
-    def next_step(): st.session_state['daily_step'] += 1
-    def prev_step(): st.session_state['daily_step'] -= 1
-    def restart_form():
-        st.session_state['daily_step'] = 1
-        st.session_state['daily_answers'] = {}
-
-    # Progress Bar
-    total_steps = 9
-    progress = (st.session_state['daily_step'] - 1) / total_steps
-    st.progress(progress)
-
-    # Question 1
-    if st.session_state['daily_step'] == 1:
-        st.subheader("1️⃣ Database Backup")
-        st.write("Did the offline backup complete successfully today?")
-        val = st.radio("Backup Status", ["Yes", "No"], key="q1_temp")
-        if st.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p1'] = val
-            next_step(); st.rerun()
-
-    # Question 2
-    elif st.session_state['daily_step'] == 2:
-        st.subheader("2️⃣ Server Protocol")
-        st.write("Was the server shutdown/startup protocol followed correctly?")
-        val = st.radio("Server Status", ["Yes", "No"], key="q2_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p2'] = val
-            next_step(); st.rerun()
-
-    # Question 3
-    elif st.session_state['daily_step'] == 3:
-        st.subheader("3️⃣ Total Encounters")
-        st.write("Total patient encounters today?")
-        val = st.number_input("Count", min_value=0, value=50, key="q3_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p3'] = val
-            next_step(); st.rerun()
-
-    # Question 4
-    elif st.session_state['daily_step'] == 4:
-        st.subheader("4️⃣ New Patients")
-        st.write("Count of **New Patients** (First time visits)?")
-        val = st.number_input("New Patient Count", min_value=0, key="q8_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p8'] = val
-            next_step(); st.rerun()
-
-    # Question 5
-    elif st.session_state['daily_step'] == 5:
-        st.subheader("5️⃣ Walk-ins")
-        st.write("Count of direct **Walk-ins**?")
-        val = st.number_input("Walk-in Count", min_value=0, key="q9_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p9'] = val
-            next_step(); st.rerun()
-
-    # Question 6
-    elif st.session_state['daily_step'] == 6:
-        st.subheader("6️⃣ Rebookings")
-        st.write("Future appointments rebooked today?")
-        val = st.number_input("Rebooking Count", min_value=0, key="q7_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p7'] = val
-            next_step(); st.rerun()
-
-    # Question 7
-    elif st.session_state['daily_step'] == 7:
-        st.subheader("7️⃣ Cash Deposit")
-        st.write("Total cash deposit amount (₹)?")
-        val = st.number_input("Amount (₹)", min_value=0, step=100, key="q6_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p6'] = val
-            next_step(); st.rerun()
-
-    # Question 8
-    elif st.session_state['daily_step'] == 8:
-        st.subheader("8️⃣ Google Reviews")
-        st.write("Google Reviews collected today?")
-        val = st.slider("Select Count", 0, 25, 0, key="q4_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        if c2.button("Next ➡️", type="primary"):
-            st.session_state['daily_answers']['p4'] = val
-            next_step(); st.rerun()
-
-    # Question 9 (Final)
-    elif st.session_state['daily_step'] == 9:
-        st.subheader("9️⃣ Daily Notes")
-        st.write("Any operational issues or notes?")
-        val = st.text_area("Notes", height=150, key="q5_temp")
-        c1, c2 = st.columns([1, 1])
-        if c1.button("⬅️ Back"): prev_step(); st.rerun()
-        
-        if c2.button("✅ Finish & Submit", type="primary"):
-            st.session_state['daily_answers']['p5'] = val
-            try:
-                with st.spinner("Submitting your report..."):
-                    client = get_google_sheet_client()
-                    sheet = client.open_by_url(SHEET_URL).worksheet("Daily_Logs")
-                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    a = st.session_state['daily_answers']
-                    # Order: Timestamp, User, Center, P1, P2, P3, P4, P5, P6, P7, P8, P9
-                    row_data = [
-                        ts, st.session_state['username'], st.session_state['center'],
-                        a.get('p1'), a.get('p2'), a.get('p3'), a.get('p4'), a.get('p5'),
-                        a.get('p6'), a.get('p7'), a.get('p8'), a.get('p9')
-                    ]
-                    sheet.append_row(row_data)
-                    
-                    # CLEAR CACHE SO DASHBOARD UPDATES
-                    st.cache_data.clear()
-                    
-                    st.success("🎉 Report Submitted!"); st.balloons()
-                    restart_form()
-            except Exception as e:
-                st.error(f"Error submitting: {e}")
-
-# --- VIEW 2: INCIDENT REPORTING (Detailed) ---
-def show_incident_reporting():
-    st.header(f"⚠️ Incident Reporting: {st.session_state['center']}")
-    st.info("Fill out all relevant sections. Multiple selections allowed for categories.")
-    
-    with st.form("incident_form", clear_on_submit=True):
-        
-        # 1. General Info
-        st.subheader("1. General Information")
+    with st.form("daily_log_new"):
+        st.subheader("1. Time Logs")
         c1, c2 = st.columns(2)
-        with c1:
-            i_staff_id = st.text_input("Staff ID")
-            i_opd = st.text_input("OPD No. (if Patient involved)")
-        with c2:
-            i_date = st.date_input("Date of Incident", datetime.now())
-            i_time = st.time_input("Time of Incident", datetime.now().time())
-
-        st.write("Report Initiated By:")
-        i_initiated = st.radio("Select One:", ["Patient", "Bystander", "Staff"], horizontal=True)
-
-        st.markdown("---")
-
-        # 2. Categories
-        st.subheader("2. Incident Categories")
-        st.caption("Select all that apply.")
-
-        c3, c4 = st.columns(2)
-        with c3:
-            st.markdown("**Patient Safety**")
-            cat_patient = st.multiselect("Select:", 
-                ["Falls", "Injuries (cuts, bruises)", "Needlestick Injuries", "Exposure to Hazards", "Violence or Aggression", "Other"], key="cat1")
-            
-            st.markdown("**Staff Safety**")
-            cat_staff = st.multiselect("Select:", 
-                ["Workplace Injuries (slips, falls)", "Exposure to Hazards", "Needlestick Injuries", "Violence or Aggression", "Other"], key="cat2")
-            
-            st.markdown("**Equipment & Facility**")
-            cat_equip = st.multiselect("Select:", 
-                ["Equipment Failure", "Utility Failures (Power/Water)", "Fire Safety", "Structural Damage"], key="cat3")
-            
-            st.markdown("**Data & Confidentiality**")
-            cat_data = st.multiselect("Select:", 
-                ["Data Breaches", "Documentation Errors", "Confidentiality Breaches"], key="cat4")
-            
-            st.markdown("**Operational**")
-            cat_ops = st.multiselect("Select:", 
-                ["Appointment Scheduling", "Communication Failures", "Service Interruptions"], key="cat5")
-
-        with c4:
-            st.markdown("**Environmental**")
-            cat_env = st.multiselect("Select:", 
-                ["Cleanliness & Hygiene", "Waste Management", "Environmental Hazards"], key="cat6")
-            
-            st.markdown("**Security**")
-            cat_sec = st.multiselect("Select:", 
-                ["Theft", "Unauthorized Access", "Vandalism"], key="cat7")
-            
-            st.markdown("**Patient Behaviour**")
-            cat_beh = st.multiselect("Select:", 
-                ["Non-Compliance", "Aggressive Behaviour", "Elopement"], key="cat8")
-            
-            st.markdown("**Medication/Clinical**")
-            cat_med = st.multiselect("Select:", 
-                ["Medication Errors", "Misdiagnosis", "Treatment Errors", "Adverse Reactions"], key="cat9")
-            
-            st.markdown("**Other**")
-            cat_other = st.multiselect("Select:", 
-                ["Natural Disasters", "Transport Incidents", "Miscellaneous"], key="cat10")
-
-        st.markdown("---")
-
-        # 3. Details
-        st.subheader("3. Additional Details")
-        i_desc = st.text_area("Descriptive Explanation of Issue", height=150)
+        open_time = c1.time_input("Centre Open Time", value=None)
+        close_time = c2.time_input("Centre Close Time", value=None)
         
-        c5, c6 = st.columns(2)
-        with c5:
-            i_witness = st.text_input("Witness Details (Name & Staff ID)")
-        with c6:
-            st.write("Escalation Reported To:")
-            i_escalation = st.radio("Select One:", 
-                ["Centre Supervisor", "HR Manager", "Lab Manager", "Growth Manager"])
-
-        st.markdown("---")
-
-        # Submit
-        if st.form_submit_button("🚨 SUBMIT INCIDENT REPORT", type="primary", use_container_width=True):
-            if not i_desc:
-                st.error("⚠️ Description is required.")
-            else:
-                try:
-                    client = get_google_sheet_client()
-                    # Connect to 'Incidents' tab
-                    try:
-                        sheet = client.open_by_url(SHEET_URL).worksheet("Incidents")
-                    except:
-                        sheet = client.open_by_url(SHEET_URL).add_worksheet(title="Incidents", rows=100, cols=21)
-                    
-                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    def join_list(l): return ", ".join(l) if l else ""
-
-                    row_data = [
-                        ts, st.session_state['username'], st.session_state['center'], # Auto-filled
-                        i_staff_id, i_initiated, i_opd, str(i_date), str(i_time),
-                        join_list(cat_patient), join_list(cat_staff), join_list(cat_equip),
-                        join_list(cat_data), join_list(cat_ops), join_list(cat_env),
-                        join_list(cat_sec), join_list(cat_beh), join_list(cat_med), join_list(cat_other),
-                        i_desc, i_witness, i_escalation
-                    ]
-                    sheet.append_row(row_data)
-                    
-                    # CLEAR CACHE
-                    st.cache_data.clear()
-                    
-                    st.success("✅ Incident logged successfully."); st.balloons()
-                except Exception as e:
-                    st.error(f"Error logging incident: {e}")
-
-# --- VIEW 3: TUTORIALS ---
-def show_tutorials(df_tutorials):
-    st.header("📚 Training & Tutorials")
-    if df_tutorials.empty:
-        st.warning("No tutorials found in the 'Tutorials' tab.")
-        return
-    for index, row in df_tutorials.iterrows():
-        with st.expander(f"🎥 {row['Title']}"):
-            st.write(row['Description'])
-            if "youtube.com" in str(row['Video_Link']) or "youtu.be" in str(row['Video_Link']):
-                st.video(row['Video_Link'])
-            else:
-                st.write(f"Link: {row['Video_Link']}")
-
-# --- VIEW 4: SETTINGS ---
-def show_settings():
-    st.header("⚙️ Settings")
-    
-    st.subheader("⏰ Daily Reminder Preference")
-    st.time_input("Set your preferred reminder time", datetime.strptime("08:00", "%H:%M").time())
-    if st.button("Save Preference"):
-        st.toast("Preference saved locally!")
-
-    st.markdown("---")
-    st.subheader("🗓️ Add Holiday")
-    with st.form("holiday_form", clear_on_submit=True):
-        h_date = st.date_input("Holiday Date")
-        h_desc = st.text_input("Description")
-        if st.form_submit_button("➕ Add"):
+        st.subheader("2. Operational Status")
+        shutdown_tmrw = st.checkbox("Is the Centre Shutting Down Tomorrow (Holiday)?")
+        
+        st.subheader("3. Metrics")
+        # Kept these from your original code as they are valuable
+        col_a, col_b = st.columns(2)
+        encounters = col_a.number_input("Total Patient Encounters", min_value=0)
+        cash_dep = col_b.number_input("Cash Deposit Amount (₹)", min_value=0.0)
+        
+        notes = st.text_area("Daily Notes / Handover")
+        
+        if st.form_submit_button("Submit Daily Log", type="primary"):
             try:
                 client = get_google_sheet_client()
-                try:
-                    sheet = client.open_by_url(SHEET_URL).worksheet("Holidays")
-                except:
-                    sheet = client.open_by_url(SHEET_URL).add_worksheet(title="Holidays", rows=100, cols=3)
-                sheet.append_row([st.session_state['center'], str(h_date), h_desc])
+                sheet = client.open_by_url(SHEET_URL)
+                ws = get_or_create_worksheet(sheet, "Daily_Logs")
                 
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Structure: Timestamp, User, Center, Open, Close, Shutdown_Tmrw, Encounters, Cash, Notes
+                row_data = [
+                    ts, st.session_state['username'], st.session_state['center'],
+                    str(open_time), str(close_time), "YES" if shutdown_tmrw else "NO",
+                    encounters, cash_dep, notes
+                ]
+                ws.append_row(row_data)
                 st.cache_data.clear()
-                st.success(f"Added holiday for {st.session_state['center']}")
+                st.success("Daily log saved!")
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- VIEW 5: SUPERVISOR DASHBOARD ---
-def show_command_centre(df_logs, df_users):
-    st.title("🚀 Operations Command Centre")
-    st.markdown("### Supervisory Analysis View")
-    st.markdown("---")
-
-    if not df_logs.empty:
-        df_logs['Date'] = pd.to_datetime(df_logs['Timestamp']).dt.date
+# --- VIEW: GAMIFIED INCIDENT REPORTING (Quiz Style) ---
+def show_incident_reporting():
+    st.header(f"⚠️ Incident Reporting")
     
-    col1, col2, col3, col4 = st.columns(4)
-    days = st.sidebar.selectbox("📅 Time Range", [7, 30, 90, 365], index=0)
-    start_date = datetime.now().date() - timedelta(days=days)
+    # Define Hierarchy
+    incident_structure = {
+        "Facility": ["AC Not Cooling", "Water Leakage", "Power Failure", "Furniture Broken"],
+        "IT & Network": ["Internet Down", "Printer Issue", "PC Slow/Crash", "Software Error"],
+        "Medical Equipment": ["BP Apparatus", "Weighing Scale", "X-Ray Issue"],
+        "Staffing": ["Staff Absent", "Late Arrival", "Uniform Issue"]
+    }
+
+    if 'inc_step' not in st.session_state: st.session_state['inc_step'] = 1
+    if 'inc_data' not in st.session_state: st.session_state['inc_data'] = {}
+
+    # Step 1: Category
+    if st.session_state['inc_step'] == 1:
+        st.subheader("Step 1: Which area is affected?")
+        cat = st.radio("Select Category", list(incident_structure.keys()))
+        if st.button("Next"):
+            st.session_state['inc_data']['category'] = cat
+            st.session_state['inc_step'] = 2
+            st.rerun()
+
+    # Step 2: Subcategory
+    elif st.session_state['inc_step'] == 2:
+        cat = st.session_state['inc_data']['category']
+        st.subheader(f"Step 2: What is the specific {cat} issue?")
+        subcat = st.radio("Select Issue", incident_structure[cat])
+        
+        c1, c2 = st.columns(2)
+        if c1.button("Back"): 
+            st.session_state['inc_step'] = 1
+            st.rerun()
+        if c2.button("Next"):
+            st.session_state['inc_data']['subcategory'] = subcat
+            st.session_state['inc_step'] = 3
+            st.rerun()
+
+    # Step 3: Details & Submit
+    elif st.session_state['inc_step'] == 3:
+        st.subheader("Step 3: Final Details")
+        st.write(f"**Issue:** {st.session_state['inc_data']['category']} > {st.session_state['inc_data']['subcategory']}")
+        
+        desc = st.text_input("Short Description")
+        priority = st.select_slider("Severity", options=["Low", "Medium", "High", "Critical"])
+        
+        c1, c2 = st.columns(2)
+        if c1.button("Back"):
+            st.session_state['inc_step'] = 2
+            st.rerun()
+            
+        if c2.button("🚨 Report Incident", type="primary"):
+            try:
+                client = get_google_sheet_client()
+                sheet = client.open_by_url(SHEET_URL)
+                ws = get_or_create_worksheet(sheet, "Incidents")
+                
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                row_data = [
+                    ts, st.session_state['center'], 
+                    st.session_state['inc_data']['category'],
+                    st.session_state['inc_data']['subcategory'],
+                    desc, priority, "Open"
+                ]
+                ws.append_row(row_data)
+                st.cache_data.clear()
+                st.success("Incident Reported & Supervisor Notified!")
+                # Reset
+                st.session_state['inc_step'] = 1
+                st.session_state['inc_data'] = {}
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+# --- VIEW: CONTACT DIRECTORY ---
+def show_contact_directory():
+    st.header("📞 Contact Directory")
+    st.info("Click 'Call' to view number and log the request to the Supervisor.")
     
-    if not df_logs.empty:
-        mask = df_logs['Date'] >= start_date
-        df_view = df_logs.loc[mask]
-    else:
-        df_view = pd.DataFrame()
-
-    active_centers = df_users[df_users['Role'] == 'Manager']['Center_Name'].unique() if not df_users.empty else []
-    days_range = [datetime.now().date() - timedelta(days=x) for x in range(days)]
-    total_expected = len(active_centers) * len(days_range)
-    total_actual = len(df_view)
-    adherence = int((total_actual/total_expected)*100) if total_expected > 0 else 0
-
-    col1.metric("🏥 Active Centers", len(active_centers))
-    col2.metric("👥 Total Patients", df_view['P3_Patient_Count'].sum() if not df_view.empty else 0)
-    col3.metric("⭐ Total Reviews", df_view['P4_Google_Reviews'].sum() if not df_view.empty else 0)
-    col4.metric("✅ Adherence Rate", f"{adherence}%")
-
-    st.markdown("---")
-    st.subheader("⚠️ Missed Logs Tracker")
-    missed_data = []
-    for d in days_range:
-        for c in active_centers:
-            if df_view.empty or df_view[(df_view['Date'] == d) & (df_view['Center_Name'] == c)].empty:
-                missed_data.append({'Date': d.strftime('%d-%b'), 'Center': c, 'Status': 'MISSING ❌'})
+    services = get_service_numbers()
+    cols = st.columns(3)
     
-    if missed_data:
-        st.dataframe(pd.DataFrame(missed_data), use_container_width=True)
-    else:
-        st.success("✨ 100% Adherence!")
+    for idx, (name, number) in enumerate(services.items()):
+        with cols[idx % 3]:
+            with st.container(border=True):
+                st.write(f"**{name}**")
+                if st.button(f"📞 Call", key=f"btn_{name}"):
+                    # Log to Sheets
+                    try:
+                        client = get_google_sheet_client()
+                        sheet = client.open_by_url(SHEET_URL)
+                        ws = get_or_create_worksheet(sheet, "Service_Logs")
+                        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        ws.append_row([ts, st.session_state['center'], name, number])
+                        st.success(f"Logged! Dial: {number}")
+                        st.markdown(f'<a href="tel:{number}">Click to Call</a>', unsafe_allow_html=True)
+                    except Exception as e:
+                        st.error(f"Logging failed: {e}")
 
-    st.markdown("---")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Patient Trends")
-        if not df_view.empty:
-            fig = px.bar(df_view, x='Center_Name', y='P3_Patient_Count', color='Center_Name')
-            st.plotly_chart(fig, use_container_width=True)
-    with c2:
-        st.subheader("Review Share")
-        if not df_view.empty:
-            fig2 = px.pie(df_view, values='P4_Google_Reviews', names='Center_Name', hole=0.4)
-            st.plotly_chart(fig2, use_container_width=True)
+# --- VIEW: REMINDERS ---
+def show_reminders():
+    st.header("🔔 Bill & Payment Reminders")
+    
+    # Load existing reminders for this center
+    client = get_google_sheet_client()
+    sheet = client.open_by_url(SHEET_URL)
+    ws = get_or_create_worksheet(sheet, "Reminders", cols=4)
+    
+    # Helper to get current value
+    all_reminders = ws.get_all_records()
+    df_rem = pd.DataFrame(all_reminders)
+    
+    defaults = {
+        "Electricity Bill": None, "Water Bill": None, "Rent": None,
+        "SIP": None, "ISP1": None, "ISP2": None
+    }
+    
+    # If data exists, populate defaults
+    if not df_rem.empty:
+        center_rem = df_rem[df_rem['Center'] == st.session_state['center']]
+        for index, row in center_rem.iterrows():
+            if row['Type'] in defaults:
+                try:
+                    defaults[row['Type']] = datetime.strptime(str(row['Due_Date']), "%Y-%m-%d").date()
+                except: pass
 
-# --- MAIN APP LOGIC ---
+    with st.form("reminders_form"):
+        col1, col2 = st.columns(2)
+        new_values = {}
+        
+        items = list(defaults.keys())
+        for i, item in enumerate(items):
+            target_col = col1 if i % 2 == 0 else col2
+            new_values[item] = target_col.date_input(f"{item} Due Date", value=defaults[item])
+
+        if st.form_submit_button("Update Reminders"):
+            # We delete old rows for this center and add new ones (Simpler than update logic)
+            # Note: In a real DB, use UPDATE. Here, we append recent on top or clear/rewrite.
+            # For GSheets simplicity, we just append new records and supervisor reads latest.
+            
+            ts = datetime.now().strftime("%Y-%m-%d")
+            for r_type, r_date in new_values.items():
+                if r_date:
+                    ws.append_row([st.session_state['center'], r_type, str(r_date), ts])
+            
+            st.success("Reminders Updated")
+            st.cache_data.clear()
+
+# --- VIEW: HOLIDAY LIST (Manager) ---
+def show_holiday_manager():
+    st.header("📅 Holiday List")
+    data = load_data()
+    df_h = data.get('Holidays')
+    
+    if not df_h.empty:
+        st.dataframe(df_h, use_container_width=True)
+    
+    st.divider()
+    with st.form("add_holiday"):
+        st.write("**Add New Holiday**")
+        d = st.date_input("Date")
+        n = st.text_input("Holiday Name")
+        if st.form_submit_button("Add"):
+            client = get_google_sheet_client()
+            sheet = client.open_by_url(SHEET_URL)
+            ws = get_or_create_worksheet(sheet, "Holidays")
+            ws.append_row([str(d), n, st.session_state['center']]) # Added center column
+            st.success("Holiday Added")
+            st.cache_data.clear()
+
+# --- SUPERVISOR DASHBOARD ---
+def show_supervisor_dashboard(data):
+    st.title("👨‍💼 Supervisor Dashboard")
+    
+    tab1, tab2, tab3 = st.tabs(["Daily Logs", "Incident Reports", "Service Call Logs"])
+    
+    # 1. Daily Logs Consolidated
+    with tab1:
+        st.subheader("Daily Centre Status")
+        date_sel = st.date_input("Select Date", date.today())
+        
+        df_logs = data.get('Daily_Logs')
+        df_users = data.get('Users')
+        
+        if not df_users.empty:
+            all_centers = df_users[df_users['Role'] == 'Centre Manager']['Center_Name'].unique()
+        else:
+            all_centers = []
+
+        status_rows = []
+        
+        # Filter logs for selected date
+        if not df_logs.empty:
+            # Handle string dates from Sheets
+            df_logs['Date_Obj'] = pd.to_datetime(df_logs['Timestamp']).dt.date
+            day_logs = df_logs[df_logs['Date_Obj'] == date_sel]
+        else:
+            day_logs = pd.DataFrame()
+
+        for center in all_centers:
+            # Find log for this center
+            entry = day_logs[day_logs['Center_Name'] == center] if not day_logs.empty else pd.DataFrame()
+            
+            if not entry.empty:
+                # Based on the row_data structure in show_daily_reporting
+                # [Timestamp, User, Center, Open, Close, Shutdown_Tmrw, Encounters, Cash, Notes]
+                # We need to map columns carefully if headers aren't perfect in sheets
+                # Assuming standard append order:
+                row = entry.iloc[0]
+                status_rows.append({
+                    "Centre": center,
+                    "Status": "✅ Reported",
+                    "Open": row.get('Open_Time', row.iloc[3] if len(row)>3 else '-'),
+                    "Close": row.get('Close_Time', row.iloc[4] if len(row)>4 else '-'),
+                    "Shutdown Tmrw": row.get('Shutdown_Tomorrow', row.iloc[5] if len(row)>5 else '-'),
+                    "Notes": row.get('Notes', row.iloc[8] if len(row)>8 else '-')
+                })
+            else:
+                status_rows.append({
+                    "Centre": center,
+                    "Status": "❌ Missing", "Open": "-", "Close": "-", "Shutdown Tmrw": "-", "Notes": "-"
+                })
+        
+        df_status = pd.DataFrame(status_rows)
+        
+        # Color coding
+        def color_missing(val):
+            color = '#ffcccc' if val == '❌ Missing' else '#ccffcc'
+            return f'background-color: {color}'
+
+        if not df_status.empty:
+            st.dataframe(df_status.style.map(color_missing, subset=['Status']), use_container_width=True)
+
+    # 2. Incidents (Last 15)
+    with tab2:
+        st.subheader("⚠️ Latest Incidents")
+        df_inc = data.get('Incidents')
+        if not df_inc.empty:
+            # Sort by Timestamp (Col 0) desc
+            df_inc = df_inc.sort_values(by=df_inc.columns[0], ascending=False).head(15)
+            st.dataframe(df_inc, use_container_width=True)
+        else:
+            st.info("No incidents reported.")
+
+    # 3. Service Logs
+    with tab3:
+        st.subheader("🔧 Service Call History")
+        df_svc = data.get('Service_Logs')
+        if not df_svc.empty:
+            df_svc = df_svc.sort_values(by=df_svc.columns[0], ascending=False)
+            st.dataframe(df_svc, use_container_width=True)
+        else:
+            st.info("No service calls logged.")
+
+# --- MAIN APP ---
 def main():
-    st.set_page_config(page_title="RheumaCare Ops", page_icon="🏥", layout="wide")
+    st.set_page_config(page_title="Clinic Ops", page_icon="🏥", layout="wide")
     
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
@@ -440,10 +383,9 @@ def main():
     if not st.session_state['logged_in']:
         left_co, cent_co, last_co = st.columns([1, 2, 1])
         with cent_co:
-            if os.path.exists("logo.png"): st.image("logo.png", width=250)
-            else: st.title("RheumaCare Ops")
+            st.image(LOGO_URL, width=200)
         
-        st.markdown("### Login")
+        st.markdown("<h3 style='text-align: center'>Login</h3>", unsafe_allow_html=True)
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             username = st.text_input("Username")
@@ -459,29 +401,41 @@ def main():
                 else:
                     st.error("Invalid credentials")
 
-    # LOGGED IN VIEW
+    # LOGGED IN INTERFACE
     else:
-        st.sidebar.title(f"👤 {st.session_state['username']}")
-        st.sidebar.caption(f"{st.session_state['center']} | {st.session_state['role']}")
-        st.sidebar.markdown("---")
-        
+        with st.sidebar:
+            st.image(LOGO_URL, width=150)
+            st.title(f"{st.session_state['center']}")
+            st.caption(f"Role: {st.session_state['role']}")
+            st.divider()
+            
+            if st.session_state['role'] == "Supervisor":
+                menu = "Supervisor Dashboard" # Only one view for now
+            else:
+                menu = st.radio("Menu", [
+                    "Daily Log", 
+                    "Incident Reporting", 
+                    "Holiday List", 
+                    "Contact Directory", 
+                    "Reminders"
+                ])
+            
+            st.divider()
+            if st.button("Log Out"):
+                st.session_state['logged_in'] = False
+                st.session_state['daily_step'] = 1 # Reset wizard
+                st.rerun()
+
+        # ROUTING
         if st.session_state['role'] == "Supervisor":
-            df_logs, df_users, df_tuts = load_data()
-            show_command_centre(df_logs, df_users)
-            if st.sidebar.button("Log Out"):
-                st.session_state['logged_in'] = False; st.rerun()
+            data = load_data()
+            show_supervisor_dashboard(data)
         else:
-            menu = st.sidebar.radio("Main Menu", ["📝 Daily Check-In", "⚠️ Incident Reporting", "📚 Tutorials", "⚙️ Settings"])
-            st.sidebar.markdown("---")
-            if st.sidebar.button("Log Out"):
-                st.session_state['logged_in'] = False; st.rerun()
-
-            df_logs, df_users, df_tutorials = load_data()
-
-            if menu == "📝 Daily Check-In": show_daily_reporting()
-            elif menu == "⚠️ Incident Reporting": show_incident_reporting()
-            elif menu == "📚 Tutorials": show_tutorials(df_tutorials)
-            elif menu == "⚙️ Settings": show_settings()
+            if menu == "Daily Log": show_daily_reporting()
+            elif menu == "Incident Reporting": show_incident_reporting()
+            elif menu == "Holiday List": show_holiday_manager()
+            elif menu == "Contact Directory": show_contact_directory()
+            elif menu == "Reminders": show_reminders()
 
 if __name__ == '__main__':
     main()

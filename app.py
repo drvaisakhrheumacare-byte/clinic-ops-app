@@ -78,7 +78,8 @@ def get_service_numbers():
 
 # --- VIEW: GAMIFIED DAILY REPORTING (Updated) ---
 def show_daily_reporting():
-    st.header(f"📝 Daily Log: {st.session_state['center']}")
+    # UPDATED TITLE HERE
+    st.header(f"📝 Rheuma CARE Daily: {st.session_state['center']}")
     
     with st.form("daily_log_new"):
         st.subheader("1. Time Logs")
@@ -90,7 +91,6 @@ def show_daily_reporting():
         shutdown_tmrw = st.checkbox("Is the Centre Shutting Down Tomorrow (Holiday)?")
         
         st.subheader("3. Metrics")
-        # Kept these from your original code as they are valuable
         col_a, col_b = st.columns(2)
         encounters = col_a.number_input("Total Patient Encounters", min_value=0)
         cash_dep = col_b.number_input("Cash Deposit Amount (₹)", min_value=0.0)
@@ -190,10 +190,26 @@ def show_incident_reporting():
             except Exception as e:
                 st.error(f"Error: {e}")
 
-# --- VIEW: CONTACT DIRECTORY ---
-def show_contact_directory():
-    st.header("📞 Contact Directory")
-    st.info("Click 'Call' to view number and log the request to the Supervisor.")
+# --- VIEW: CONTACT US (Updated with Dr Vaisakh Info) ---
+def show_contact_us():
+    st.header("📞 Contact Us")
+    
+    # --- Part 1: Main Medical Contact ---
+    st.markdown("### Medical Director")
+    
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.info("📧 **Email**")
+        st.markdown("**dr.vaisakh@rheumacare.com**")
+    with col_right:
+        st.success("📞 **Phone**")
+        st.markdown("**9717096659**")
+        
+    st.markdown("---")
+
+    # --- Part 2: Facility Services ---
+    st.subheader("Facility & Operations Support")
+    st.caption("Click 'Call' to view number and log the request to the Supervisor.")
     
     services = get_service_numbers()
     cols = st.columns(3)
@@ -252,10 +268,6 @@ def show_reminders():
             new_values[item] = target_col.date_input(f"{item} Due Date", value=defaults[item])
 
         if st.form_submit_button("Update Reminders"):
-            # We delete old rows for this center and add new ones (Simpler than update logic)
-            # Note: In a real DB, use UPDATE. Here, we append recent on top or clear/rewrite.
-            # For GSheets simplicity, we just append new records and supervisor reads latest.
-            
             ts = datetime.now().strftime("%Y-%m-%d")
             for r_type, r_date in new_values.items():
                 if r_date:
@@ -320,10 +332,6 @@ def show_supervisor_dashboard(data):
             entry = day_logs[day_logs['Center_Name'] == center] if not day_logs.empty else pd.DataFrame()
             
             if not entry.empty:
-                # Based on the row_data structure in show_daily_reporting
-                # [Timestamp, User, Center, Open, Close, Shutdown_Tmrw, Encounters, Cash, Notes]
-                # We need to map columns carefully if headers aren't perfect in sheets
-                # Assuming standard append order:
                 row = entry.iloc[0]
                 status_rows.append({
                     "Centre": center,
@@ -372,7 +380,8 @@ def show_supervisor_dashboard(data):
 
 # --- MAIN APP ---
 def main():
-    st.set_page_config(page_title="Clinic Ops", page_icon="🏥", layout="wide")
+    # UPDATED PAGE TITLE
+    st.set_page_config(page_title="Rheuma CARE Daily", page_icon="🏥", layout="wide")
     
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
@@ -385,7 +394,7 @@ def main():
         with cent_co:
             st.image(LOGO_URL, width=200)
         
-        st.markdown("<h3 style='text-align: center'>Login</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center'>Rheuma CARE Login</h3>", unsafe_allow_html=True)
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             username = st.text_input("Username")
@@ -413,10 +422,10 @@ def main():
                 menu = "Supervisor Dashboard" # Only one view for now
             else:
                 menu = st.radio("Menu", [
-                    "Daily Log", 
+                    "Rheuma CARE Daily",  # UPDATED NAME
                     "Incident Reporting", 
                     "Holiday List", 
-                    "Contact Directory", 
+                    "Contact Us",         # UPDATED NAME
                     "Reminders"
                 ])
             
@@ -431,10 +440,10 @@ def main():
             data = load_data()
             show_supervisor_dashboard(data)
         else:
-            if menu == "Daily Log": show_daily_reporting()
+            if menu == "Rheuma CARE Daily": show_daily_reporting()
             elif menu == "Incident Reporting": show_incident_reporting()
             elif menu == "Holiday List": show_holiday_manager()
-            elif menu == "Contact Directory": show_contact_directory()
+            elif menu == "Contact Us": show_contact_us() # Updated function call
             elif menu == "Reminders": show_reminders()
 
 if __name__ == '__main__':

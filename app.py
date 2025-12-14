@@ -37,7 +37,7 @@ def get_google_sheet_client():
     client = gspread.authorize(creds)
     return client
 
-def get_or_create_worksheet(sheet, name, rows=100, cols=15):
+def get_or_create_worksheet(sheet, name, rows=100, cols=25):
     try:
         return sheet.worksheet(name)
     except:
@@ -65,7 +65,6 @@ def load_data():
         for tab in tabs:
             try:
                 ws = sheet.worksheet(tab)
-                # Ensure all data is read as string to avoid type confusion
                 df = pd.DataFrame(ws.get_all_records())
                 data[tab] = df
             except:
@@ -96,7 +95,6 @@ def check_login(username, password):
         return False, None, None
 
 def get_center_service_numbers(center_name):
-    # FALLBACK to fetching from sheet, if missing use "Not Set"
     data = load_data()
     df_contacts = data.get('Service_Contacts')
     
@@ -129,8 +127,6 @@ def is_holiday_tomorrow(center_name):
         return False
         
     tomorrow = date.today() + timedelta(days=1)
-    
-    # Check against DD/MM/YYYY and YYYY-MM-DD
     fmt_dd_mm_yyyy = tomorrow.strftime("%d/%m/%Y") 
     fmt_yyyy_mm_dd = tomorrow.strftime("%Y-%m-%d") 
     
@@ -151,7 +147,7 @@ def show_daily_reporting():
     if 'daily_step' not in st.session_state: st.session_state['daily_step'] = 1
     if 'daily_data' not in st.session_state: st.session_state['daily_data'] = {}
 
-    # Wizard Step 1: Time & Server Status
+    # --- STEP 1: OPERATIONAL BASICS ---
     if st.session_state['daily_step'] == 1:
         st.subheader("Step 1: Operational Basics")
         
@@ -159,8 +155,6 @@ def show_daily_reporting():
         open_options = generate_time_options(7, 20)
         close_options = generate_time_options(11, 22)
         
-        # Note: We collect these for UI flow, but we won't save them to sheet 
-        # as your sheet columns don't seem to include Open/Close time.
         open_time = c1.selectbox("Centre Open Time", open_options, index=0)
         close_time = c2.selectbox("Centre Close Time", close_options, index=len(close_options)-1)
         
@@ -169,9 +163,7 @@ def show_daily_reporting():
         
         offline_backup = st.checkbox("✅ Offline Backup Taken?")
         
-        # Holiday check
         is_holiday = is_holiday_tomorrow(st.session_state['center'])
-        
         server_shutdown = False
         if is_holiday:
             tmrw_date = date.today() + timedelta(days=1)
@@ -179,7 +171,6 @@ def show_daily_reporting():
             server_shutdown = st.checkbox("✅ Server Shutdown Completed?")
         
         if st.button("Next ➡️"):
-            # We store 'server_shutdown' as YES/NO if asked, or "N/A" if not asked
             server_val = "YES" if server_shutdown else "NO"
             if not is_holiday:
                 server_val = "N/A"
@@ -191,19 +182,17 @@ def show_daily_reporting():
             st.session_state['daily_step'] = 2
             st.rerun()
 
-    # Wizard Step 2: Metrics
+    # --- STEP 2: FINANCIALS ---
     elif st.session_state['daily_step'] == 2:
-        st.subheader("Step 2: Patient & Cash Metrics")
+        st.subheader("Step 2: Financials")
         
         c1, c2 = st.columns(2)
         with c1:
-            total_patients = st.number_input("Total Patient Count", min_value=0)
-            new_patients = st.number_input("New Patients Count", min_value=0)
-            walk_in = st.number_input("Walk-in Patients Count", min_value=0)
+            cash_dep = st.number_input("Cash Deposit Amount (₹)", min_value=0.0)
+            cash_rec = st.number_input("Cash Received Amount (₹)", min_value=0.0)
         with c2:
-            rebooking = st.number_input("Rebooking Count", min_value=0)
-            reviews = st.number_input("Google Reviews Count", min_value=0)
-            cash = st.number_input("Cash Deposit Amount (₹)", min_value=0.0)
+            upi_amt = st.number_input("UPI Amount (₹)", min_value=0.0)
+            card_amt = st.number_input("Card Amount (₹)", min_value=0.0)
 
         c_back, c_next = st.columns([1,1])
         if c_back.button("⬅️ Back"):
@@ -211,48 +200,109 @@ def show_daily_reporting():
             st.rerun()
         if c_next.button("Next ➡️"):
             st.session_state['daily_data'].update({
-                'total_patients': total_patients, 'new_patients': new_patients,
-                'walk_in': walk_in, 'rebooking': rebooking,
-                'reviews': reviews, 'cash': cash
+                'cash_deposit': cash_dep,
+                'cash_received': cash_rec,
+                'upi_amount': upi_amt,
+                'card_amount': card_amt
             })
             st.session_state['daily_step'] = 3
             st.rerun()
 
-    # Wizard Step 3: Notes & Submit
+    # --- STEP 3: BILLING & CALL METRICS ---
     elif st.session_state['daily_step'] == 3:
-        st.subheader("Step 3: Final Notes")
+        st.subheader("Step 3: Billing & Call Metrics")
+        
+        st.markdown("**Billing Counters (Nos)**")
+        c1, c2, c3, c4 = st.columns(4)
+        rec_bill = c1.number_input("Reception", min_value=0)
+        phar_bill = c2.number_input("Pharmacy", min_value=0)
+        lab_bill = c3.number_input("Lab", min_value=0)
+        phys_bill = c4.number_input("Physiotherapy", min_value=0)
+        
+        st.markdown("---")
+        st.markdown("**Patient Management (Nos)**")
+        
+        col_a, col_b = st.columns(2)
+        with col_a:
+            rebook = st.number_input("Rebooking Nos", min_value=0)
+            tele_fol = st.number_input("Tele Follow-up Nos", min_value=0)
+            conf_call = st.number_input("Confirmation Calling Nos", min_value=0)
+        
+        with col_b:
+            def_pat = st.number_input("Default Patients Follow-up", min_value=0)
+            can_pat = st.number_input("Cancelled Patients Follow-up", min_value=0)
+
+        c_back, c_next = st.columns([1,1])
+        if c_back.button("⬅️ Back"):
+            st.session_state['daily_step'] = 2
+            st.rerun()
+        if c_next.button("Next ➡️"):
+            st.session_state['daily_data'].update({
+                'bill_recep': rec_bill, 'bill_phar': phar_bill,
+                'bill_lab': lab_bill, 'bill_phys': phys_bill,
+                'cnt_rebook': rebook, 'cnt_tele': tele_fol,
+                'cnt_conf': conf_call, 'cnt_def': def_pat,
+                'cnt_can': can_pat
+            })
+            st.session_state['daily_step'] = 4
+            st.rerun()
+
+    # --- STEP 4: FOOTFALL & NOTES ---
+    elif st.session_state['daily_step'] == 4:
+        st.subheader("Step 4: Footfall & Final Notes")
+        
+        c1, c2, c3 = st.columns(3)
+        tot_pat = c1.number_input("Total Patient Encounters", min_value=0)
+        new_pat = c2.number_input("New Patients", min_value=0)
+        walk_pat = c3.number_input("Walk-in Patients", min_value=0)
+        
+        reviews = st.number_input("Google Reviews Count", min_value=0)
         notes = st.text_area("Daily Notes / Handover Issues")
+        
         st.info("Please review your data before submitting.")
         
         c_back, c_submit = st.columns([1,1])
         if c_back.button("⬅️ Back"):
-            st.session_state['daily_step'] = 2
+            st.session_state['daily_step'] = 3
             st.rerun()
             
         if c_submit.button("✅ Submit Daily Log", type="primary"):
             def _submit():
                 client = get_google_sheet_client()
                 sheet = client.open_by_url(SHEET_URL)
-                ws = get_or_create_worksheet(sheet, "Daily_Logs")
+                ws = get_or_create_worksheet(sheet, "Daily_Logs", cols=25)
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 d = st.session_state['daily_data']
                 
-                # --- FIXED ROW MAPPING ---
-                # Strictly aligned to your sheet headers:
-                # Timestamp | Username | Center | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 | P9
+                # --- FINAL COLUMN MAPPING (23 Columns) ---
                 row_data = [
-                    ts,                                         # Timestamp
-                    st.session_state['username'],               # Submitter_Username
-                    st.session_state['center'],                 # Center_Name
-                    d.get('offline_backup', 'NO'),              # P1_DB_Backup
-                    d.get('server_shutdown', 'N/A'),            # P2_Server_Protocol
-                    d.get('total_patients', 0),                 # P3_Total_Encounters
-                    d.get('reviews', 0),                        # P4_Google_Reviews
-                    notes,                                      # P5_Daily_Notes
-                    d.get('cash', 0.0),                         # P6_Cash_Deposit
-                    d.get('rebooking', 0),                      # P7_Rebooking_Count
-                    d.get('new_patients', 0),                   # P8_New_Patients
-                    d.get('walk_in', 0)                         # P9_Walkin_Patients
+                    ts,                                         # 1. Timestamp
+                    st.session_state['username'],               # 2. Username
+                    st.session_state['center'],                 # 3. Center
+                    d.get('offline_backup', 'NO'),              # 4. Backup
+                    d.get('server_shutdown', 'N/A'),            # 5. Server
+                    
+                    d.get('cash_deposit', 0.0),                 # 6. Cash Deposit
+                    d.get('cash_received', 0.0),                # 7. Cash Received
+                    d.get('upi_amount', 0.0),                   # 8. UPI
+                    d.get('card_amount', 0.0),                  # 9. Card
+                    
+                    d.get('bill_recep', 0),                     # 10. Recep Bill
+                    d.get('bill_phar', 0),                      # 11. Pharm Bill
+                    d.get('bill_lab', 0),                       # 12. Lab Bill
+                    d.get('bill_phys', 0),                      # 13. Physio Bill
+                    
+                    d.get('cnt_rebook', 0),                     # 14. Rebooking
+                    d.get('cnt_tele', 0),                       # 15. Tele Followup
+                    d.get('cnt_conf', 0),                       # 16. Confirmation
+                    d.get('cnt_def', 0),                        # 17. Default
+                    d.get('cnt_can', 0),                        # 18. Cancelled
+                    
+                    tot_pat,                                    # 19. Total Patients
+                    new_pat,                                    # 20. New Patients
+                    walk_pat,                                   # 21. Walk-in
+                    reviews,                                    # 22. Reviews
+                    notes                                       # 23. Notes
                 ]
                 ws.append_row(row_data)
 
